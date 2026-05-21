@@ -17,14 +17,64 @@ const Signup = () => {
     setLoading(true);
 
     const { data, error } = await supabase.auth.signUp({ email, password });
+    
+    // ✅ Fix 1: check error, not data
+    if (error) {
+      alert(error.message);
+      setLoading(false);
+      return;
+    }
+
+    // ✅ Fix 2: insert name into profiles right after signup
+    // data.user exists even before email confirmation
+    if (data.user) {
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .insert({
+          id: data.user.id,       // must match auth.users id
+          full_name: name,
+          email: email,
+        });
+
+      if (profileError) {
+        console.error("Profile insert failed:", profileError.message);
+      }
+    }
+
     setLoading(false);
 
-    if (data) {
-      console.log(`User signed up successfully ${data.user}`);
+    // ✅ Fix 3: Supabase requires email confirmation by default.
+    // data.session will be null until confirmed — tell the user.
+    if (data.session) {
+      // Email confirmations are OFF — user is logged in immediately
+      navigate("/dashboard");
     } else {
-      alert("Error Signingup the User");
+      // Email confirmations are ON (default) — session is null
+      alert("Account created! Please check your email to confirm your account.");
+      navigate("/signin");
     }
   };
+
+  // ✅ Fix 4: handle Google OAuth errors
+  async function signInWithGoogle() {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    });
+
+    if (error) {
+      alert("Google sign-in failed: " + error.message);
+    }
+    // No navigation needed — Supabase handles the redirect automatically
+    // Profile is created by the DB trigger (handle_new_user) on OAuth
+  }
+
 
   return (
     <>
@@ -247,9 +297,10 @@ const Signup = () => {
 
                   {/* Google */}
                   <button type="button"
+                  onClick={signInWithGoogle}
                     className="w-full py-3 bg-white border border-gray-200 text-gray-700 rounded-xl
                       font-medium hover:bg-gray-50 hover:border-gray-300 hover:shadow-md
-                      transition-all duration-300 hover:-translate-y-0.5 flex items-center justify-center gap-3">
+                      transition-all duration-300 hover:-translate-y-0.5 flex items-center justify-center gap-3 cursor-pointer">
                     <svg className="w-5 h-5" viewBox="0 0 24 24">
                       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
                       <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>

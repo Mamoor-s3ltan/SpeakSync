@@ -24,6 +24,20 @@ export default function SignIn() {
       alert("Wrong password or user");
     }
   };
+    async function signInWithGoogle() {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        // Optional: Where to send the user after successful login
+        redirectTo: 'http://localhost:5173/dashboard', 
+        // Optional: Forces the account selection screen every time
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    })
+  }
 
   return (
     <>
@@ -210,6 +224,7 @@ export default function SignIn() {
 
                 {/* Google */}
                 <button type="button"
+                 onClick={signInWithGoogle}
                   className="w-full py-3 bg-white border border-gray-200 text-gray-700 rounded-xl
                     font-medium hover:bg-gray-50 hover:border-gray-300 hover:shadow-md
                     transition-all duration-300 hover:-translate-y-0.5 flex items-center justify-center gap-3">

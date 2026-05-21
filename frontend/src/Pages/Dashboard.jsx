@@ -1,4 +1,4 @@
-import React,{useState} from 'react'
+import React,{useState,useEffect} from 'react'
 import { useSession } from '../context/user_session';
 import { useNavigate } from "react-router";
 import { Video, Link as LinkIcon, Copy, Check, Calendar, Clock,LogOut } from "lucide-react";
@@ -7,13 +7,14 @@ import { supabase } from '../config/db.conn';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { session} = useSession();
+  const {session} = useSession();
   const [meetingLink, setMeetingLink] = useState("");
   const [copied, setCopied] = useState(false);
   const [joinLink, setJoinLink] = useState("");
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [isStartingMeeting, setIsStartingMeeting] = useState(false);
   const [linkError, setLinkError] = useState("");
+  // const [upcomingMeetings, setupcomingMeetings] = useState([])
 
   const generateMeetingLink = () => {
     setIsGeneratingLink(true);
@@ -37,6 +38,24 @@ const Dashboard = () => {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+  const current_user = session
+  const current_user_id = current_user?.session?.user?.id;
+
+  // useEffect(() => {
+  //   async function GetScheduleMeeting(){
+  //     if(current_user == null){
+  //       return 
+  //     }
+      
+  //     const{data,error} = await supabase.from("schedule_meeting").select("*").eq("user_id",current_user_id)
+  //     setupcomingMeetings(data)
+  //     if(error){
+  //       console.error("Having error Fetching data")
+  //     }
+  //   }
+  //   GetScheduleMeeting()
+  // }, [current_user])
+  
 
 const startInstantMeeting = () => {
   setIsStartingMeeting(true);
