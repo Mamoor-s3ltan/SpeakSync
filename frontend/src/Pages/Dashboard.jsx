@@ -14,7 +14,7 @@ const Dashboard = () => {
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [isStartingMeeting, setIsStartingMeeting] = useState(false);
   const [linkError, setLinkError] = useState("");
-  // const [upcomingMeetings, setupcomingMeetings] = useState([])
+  const [upcomingMeetings, setupcomingMeetings] = useState([])
 
   const generateMeetingLink = () => {
     setIsGeneratingLink(true);
@@ -39,22 +39,23 @@ const Dashboard = () => {
     setTimeout(() => setCopied(false), 2000);
   };
   const current_user = session
-  const current_user_id = current_user?.session?.user?.id;
+  
 
-  // useEffect(() => {
-  //   async function GetScheduleMeeting(){
-  //     if(current_user == null){
-  //       return 
-  //     }
+  useEffect(() => {
+    async function GetScheduleMeeting(){
+      if(current_user == null){
+        return 
+      }
+     let user_id =current_user.user.identities[0].user_id
       
-  //     const{data,error} = await supabase.from("schedule_meeting").select("*").eq("user_id",current_user_id)
-  //     setupcomingMeetings(data)
-  //     if(error){
-  //       console.error("Having error Fetching data")
-  //     }
-  //   }
-  //   GetScheduleMeeting()
-  // }, [current_user])
+      const{data,error} = await supabase.from("schedule_meeting").select("*").eq("user_id",user_id)
+      setupcomingMeetings(data)
+      if(error){
+        console.error("Having error Fetching data",error)
+      }
+    }
+    GetScheduleMeeting()
+  }, [current_user])
   
 
 const startInstantMeeting = () => {
@@ -79,20 +80,20 @@ const startInstantMeeting = () => {
      navigate("/")
   }
 
-  const upcomingMeetings = [
-    {
-      id: 1,
-      title: "Team Standup",
-      time: "Today, 2:00 PM",
-      participants: 5,
-    },
-    {
-      id: 2,
-      title: "Client Call",
-      time: "Tomorrow, 10:00 AM",
-      participants: 3,
-    },
-  ];
+  //   const upcomingMeetings = [
+  //   {
+  //     id: 1,
+  //     title: "Team Standup",
+  //     time: "Today, 2:00 PM",
+  //     participants: 5,
+  //   },
+  //   {
+  //     id: 2,
+  //     title: "Client Call",
+  //     time: "Tomorrow, 10:00 AM",
+  //     participants: 3,
+  //   },
+  // ];
 
   const recentMeetings = [
     {
@@ -252,8 +253,12 @@ const startInstantMeeting = () => {
                   key={meeting.id}
                   className="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
                 >
-                  <h3 className="font-bold text-black">{meeting.title}</h3>
-                  <p className="text-sm text-gray-600">{meeting.time}</p>
+                  <h3 className="font-bold text-black">{meeting.meeting_title}</h3>
+                  <div className='flex gap-2'>
+                      <p className="text-sm text-gray-600">{meeting.time}</p>
+                      <p className="text-sm text-gray-600">{meeting.date}</p>
+                  </div>
+                  
                   <p className="text-sm text-gray-600">
                     {meeting.participants} participants
                   </p>

@@ -7,12 +7,14 @@ import {
   X, Send, Wifi, WifiOff, Globe, Users,
   Monitor, MonitorOff, RefreshCw,
 } from "lucide-react";
+import { useSession } from '../context/user_session';
 import { useSettings } from "../context/SettingsContext";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const SIGNAL_URL  = import.meta.env.VITE_SIGNAL_URL  || "http://localhost:3001";
-const PYTHON_HTTP = import.meta.env.VITE_PYTHON_HTTP  || "https://convene-chowtime-dripping.ngrok-free.dev";
+const PYTHON_HTTP = import.meta.env.VITE_PYTHON_HTTP  || "http://127.0.0.1:8000";
 const PYTHON_WS_URL = PYTHON_HTTP.replace(/^http/, "ws");
+
 
 const ICE_SERVERS = {
   iceServers: [
@@ -164,6 +166,8 @@ export default function MeetingRoom() {
   const { meetingId } = useParams();
   const navigate      = useNavigate();
   const { settings, update } = useSettings();
+  const {session} = useSession();
+
 
   // Language state
   const myLangRef  = useRef(settings.primaryLang);
@@ -201,11 +205,26 @@ export default function MeetingRoom() {
   const audioQueueRef     = useRef([]);     // queue of ArrayBuffer (raw MP3 bytes)
   const isPlayingRef      = useRef(false);  // mutex flag
 
+  useEffect(() => {
+
+    if(!session){
+      navigate('/signin')
+    }
+
+  }, [session])
+  
+
+
+
+
   /**
    * Lazily create or resume the AudioContext.
    * Must be called inside a user-gesture handler at least once to unlock it.
    * Returns null if AudioContext is not available.
    */
+
+
+
   const getAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -508,7 +527,18 @@ export default function MeetingRoom() {
 
     const remoteStream = new MediaStream();
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-    pc.ontrack = (e) => e.streams[0].getTracks().forEach((t) => remoteStream.addTrack(t));
+    pc.ontrack = (e) => {
+      // e.streams[0] is preferred; fall back to e.track if streams is empty
+      if (e.streams && e.streams[0]) {
+        e.streams[0].getTracks().forEach((t) => {
+          if (!remoteStream.getTracks().includes(t)) remoteStream.addTrack(t);
+        });
+      } else {
+        if (!remoteStream.getTracks().includes(e.track)) remoteStream.addTrack(e.track);
+      }
+      // Re-assign srcObject to force the video element to refresh
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+    };
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) socketRef.current?.emit("webrtc:ice-candidate", { targetId, candidate });
@@ -525,10 +555,9 @@ export default function MeetingRoom() {
 
     pc.onnegotiationneeded = async () => {
       try {
+        if (pc.signalingState !== "stable") return; // check BEFORE any await
         makingOfferRef.current = true;
-        const offer = await pc.createOffer();
-        if (pc.signalingState !== "stable") return;
-        await pc.setLocalDescription(offer);
+        await pc.setLocalDescription();             // modern implicit-offer form
         socketRef.current?.emit("webrtc:offer", { targetId, sdp: pc.localDescription });
       } catch (err) {
         console.error("[WebRTC] Offer:", err);
@@ -614,7 +643,7 @@ export default function MeetingRoom() {
     socket.on("connect", async () => {
       myPeerIdRef.current = socket.id;
       await getLocalMedia(settings.micDeviceId, settings.cameraDeviceId);
-      socket.emit("room:join", { roomId: meetingId, userName });
+      socket.emit("room:join", { roomId: meetingId, userName, userId: session.user.id,  });
     });
 
     socket.on("room:joined", ({ participants: initial }) => {
@@ -642,10 +671,19 @@ export default function MeetingRoom() {
       }
     });
 
-    socket.on("peer:joined", ({ peerId, userName: pName }) => {
+    socket.on("peer:joined", async ({ peerId, userName: pName }) => {
       setPeerName(pName);
       setPeerConnected(true);
-      createPeerConnection(peerId);
+      isPoliteRef.current = false; // host is always impolite
+      const pc = createPeerConnection(peerId);
+      // Explicitly kick off the offer — onnegotiationneeded may have fired
+      // before tracks were ready, so we send it manually here.
+      try {
+        await pc.setLocalDescription();
+        socket.emit("webrtc:offer", { targetId: peerId, sdp: pc.localDescription });
+      } catch (err) {
+        console.error("[WebRTC] peer:joined offer:", err);
+      }
       setParticipants((prev) => {
         if (prev.find((p) => p.peerId === peerId)) return prev;
         return [...prev, { peerId, userName: pName }];
