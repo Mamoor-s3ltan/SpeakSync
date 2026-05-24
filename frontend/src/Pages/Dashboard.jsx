@@ -3,6 +3,7 @@ import { useSession } from '../context/user_session';
 import { useNavigate } from "react-router";
 import { Video, Link as LinkIcon, Copy, Check, Calendar, Clock,LogOut } from "lucide-react";
 import { supabase } from '../config/db.conn';
+import { toast } from 'react-toastify';
 
 
 const Dashboard = () => {
@@ -25,6 +26,7 @@ const Dashboard = () => {
         const meetingId = Math.random().toString(36).substring(2, 12);
         const link = `${window.location.origin}/meeting/${meetingId}`;
         setMeetingLink(link);
+        toast.success("Meeting link generated")
         setIsGeneratingLink(false);
       } catch (error) {
         setLinkError("Failed to generate link. Please try again.");

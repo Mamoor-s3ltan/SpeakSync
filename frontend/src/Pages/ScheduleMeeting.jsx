@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from '../config/db.conn';
 import { Calendar, Clock, Copy, Check, Trash2, Edit, X, Save } from "lucide-react";
 import { useSession } from "../context/user_session";
+import { toast } from "react-toastify";
 
 export default function ScheduleMeeting() {
   const [showForm, setShowForm] = useState(true);
@@ -65,6 +66,7 @@ export default function ScheduleMeeting() {
         })
         .select()
         .single();
+        toast.success("Meeting Created Succesfully")
 
       if (error) {
         alert("Meeting could not be created. Please try again.");
@@ -92,6 +94,7 @@ export default function ScheduleMeeting() {
       .from("schedule_meeting")
       .delete()
       .eq("id", id);
+      toast.success("Deleted succesfully")
 
     if (error) {
       console.error("Error deleting meeting:", error);

@@ -2,11 +2,14 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { supabase } from "../config/db.conn";
+import { ToastContainer, toast } from 'react-toastify';
 
 export default function SignIn() {
   const navigate = useNavigate();
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const notify = () => toast('Wow so easy !');
 
   // ── Business logic unchanged ──
   const handleSubmit = async (formData) => {
@@ -19,6 +22,7 @@ export default function SignIn() {
 
     if (data.user) {
       navigate("/dashboard");
+      toast.success('Welcome back! 👋');
       console.log(data.session);
     } else {
       alert("Wrong password or user");
@@ -37,6 +41,7 @@ export default function SignIn() {
         },
       },
     })
+   
   }
 
   return (

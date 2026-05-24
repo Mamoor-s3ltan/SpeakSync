@@ -214,9 +214,6 @@ export default function MeetingRoom() {
   }, [session])
   
 
-
-
-
   /**
    * Lazily create or resume the AudioContext.
    * Must be called inside a user-gesture handler at least once to unlock it.

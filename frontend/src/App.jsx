@@ -1,6 +1,7 @@
 import React from "react";
 import { Routes, Route } from "react-router";        // no BrowserRouter import
 import { SettingsProvider } from "./context/SettingsContext";
+import { ToastContainer} from 'react-toastify';
 
 import Landing from "./Pages/Landing";
 import SignIn from "./Pages/Signin";
@@ -16,6 +17,7 @@ export default function App() {
   return (
     <SettingsProvider>
       <div className="App">
+         <ToastContainer position='bottom-right' autoClose={3000} theme="dark" />
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="signin" element={<SignIn />} />
