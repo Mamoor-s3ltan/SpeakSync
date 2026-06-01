@@ -11,8 +11,8 @@ import { useSession } from '../context/user_session';
 import { useSettings } from "../context/SettingsContext";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-const SIGNAL_URL  = import.meta.env.VITE_SIGNAL_URL  || "http://localhost:3001";
-const PYTHON_HTTP = import.meta.env.VITE_PYTHON_HTTP  || "http://127.0.0.1:8000";
+const SIGNAL_URL  = import.meta.env.VITE_SIGNAL_URL  || " https://wilber-centurial-elda.ngrok-free.dev";
+const PYTHON_HTTP = import.meta.env.VITE_PYTHON_HTTP  || "https://convene-chowtime-dripping.ngrok-free.dev";
 const PYTHON_WS_URL = PYTHON_HTTP.replace(/^http/, "ws");
 
 
