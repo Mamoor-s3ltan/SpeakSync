@@ -8,6 +8,7 @@ const defaults = {
   micDeviceId:     "default",
   speakerDeviceId: "default",
   cameraDeviceId:  "default",
+  ttsVolume:       1.0,   // NEW: TTS volume (0.0 – 1.0)
 };
 
 const SettingsContext = createContext();

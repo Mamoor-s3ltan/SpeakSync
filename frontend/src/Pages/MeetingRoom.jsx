@@ -2,19 +2,19 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router";
 import { io } from "socket.io-client";
 import {
-  Mic, MicOff, Video, VideoOff,
-  MessageSquare, PhoneOff, Copy, Languages, Check,
-  X, Send, Wifi, WifiOff, Globe, Users,
-  Monitor, MonitorOff, RefreshCw,
+  Mic, MicOff, Video, VideoOff, MessageSquare, PhoneOff,
+  Copy, Languages, Check, X, Send, Wifi, WifiOff, Globe,
+  Users, Monitor, MonitorOff, RefreshCw, Volume2, VolumeX,
+  Shield, Clock, ChevronDown, LogOut,
 } from "lucide-react";
-import { useSession } from '../context/user_session';
+import { useSession } from "../context/user_session";
 import { useSettings } from "../context/SettingsContext";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const SIGNAL_URL  = import.meta.env.VITE_SIGNAL_URL  || " https://wilber-centurial-elda.ngrok-free.dev";
 const PYTHON_HTTP = import.meta.env.VITE_PYTHON_HTTP  || "https://convene-chowtime-dripping.ngrok-free.dev";
-const PYTHON_WS_URL = PYTHON_HTTP.replace(/^http/, "ws");
 
+const PYTHON_WS_URL = PYTHON_HTTP.replace(/^http/, "ws");
 
 const ICE_SERVERS = {
   iceServers: [
@@ -23,7 +23,9 @@ const ICE_SERVERS = {
   ],
 };
 
-const AUDIO_CHUNK_MS = 2500;
+// ✅ FIX 1: 500ms chunks instead of 250ms — halves the number of WS sends,
+//    reducing network overhead without noticeably increasing buffering delay.
+const AUDIO_CHUNK_MS = 500;
 
 const MIME_PRIORITY = [
   "audio/webm;codecs=opus",
@@ -38,126 +40,241 @@ const getBestMimeType = () =>
 const langLabel = (c) => (c === "en" ? "English" : "اردو");
 const langFlag  = (c) => (c === "en" ? "🇬🇧" : "🇵🇰");
 
-// ─── Language Dialog ─────────────────────────────────────────────────────────
+// ─── Auth Guard ───────────────────────────────────────────────────────────────
+function AuthGuard({ session, children }) {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!session?.user) {
+      navigate("/login", { replace: true });
+    }
+  }, [session, navigate]);
+  if (!session?.user) return null;
+  return children;
+}
+
+// ─── Language Dialog ──────────────────────────────────────────────────────────
 function LanguageDialog({ userName, defaultLang, onConfirm }) {
   const [myLang, setMyLang] = useState(defaultLang || "en");
   const tgtLang = myLang === "en" ? "ur" : "en";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md mx-4">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
-            <Globe className="w-6 h-6 text-blue-600" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
+      <div
+        className="w-full max-w-md mx-4 rounded-2xl overflow-hidden shadow-2xl"
+        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)", border: "1px solid rgba(255,255,255,0.08)" }}
+      >
+        {/* Header */}
+        <div className="px-8 pt-8 pb-6 border-b border-white/10">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)" }}>
+              <Globe className="w-6 h-6 text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-white">Language Setup</h2>
+              <p className="text-sm text-white/50">Welcome, {userName}!</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Language Setup</h2>
-            <p className="text-sm text-gray-500">Welcome, {userName}!</p>
-          </div>
+          <p className="text-sm text-white/60 leading-relaxed">
+            Select your speaking language. Your voice will be translated in real-time for the other participant.
+          </p>
         </div>
-        <p className="text-gray-600 text-sm mb-5">
-          Select the language <strong>you speak</strong>. Your speech will be translated for the other participant.
-        </p>
-        <div className="space-y-3 mb-5">
+
+        {/* Options */}
+        <div className="px-8 py-6 space-y-3">
           {[
-            { code: "en", label: "English",       flag: "🇬🇧", desc: "I speak English — translate to Urdu" },
-            { code: "ur", label: "اردو (Urdu)",   flag: "🇵🇰", desc: "میں اردو بولتا ہوں — انگریزی میں ترجمہ" },
+            { code: "en", label: "English", flag: "🇬🇧", desc: "I speak English → translate to Urdu" },
+            { code: "ur", label: "اردو (Urdu)", flag: "🇵🇰", desc: "میں اردو بولتا ہوں → انگریزی میں ترجمہ" },
           ].map((l) => (
             <button
               key={l.code}
               onClick={() => setMyLang(l.code)}
-              className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all text-left ${
-                myLang === l.code
-                  ? "border-blue-600 bg-blue-50"
-                  : "border-gray-200 hover:border-gray-300 bg-white"
-              }`}
+              className="w-full flex items-center gap-4 p-4 rounded-xl text-left transition-all duration-200"
+              style={{
+                background: myLang === l.code ? "rgba(59,130,246,0.15)" : "rgba(255,255,255,0.04)",
+                border: myLang === l.code ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.08)",
+              }}
             >
               <span className="text-3xl">{l.flag}</span>
               <div className="flex-1">
-                <div className={`font-semibold ${myLang === l.code ? "text-blue-700" : "text-gray-800"}`}>
-                  {l.label}
-                </div>
-                <div className={`text-xs mt-0.5 ${myLang === l.code ? "text-blue-500" : "text-gray-400"}`}>
+                <div className="font-medium text-white text-sm">{l.label}</div>
+                <div className="text-xs mt-0.5" style={{ color: myLang === l.code ? "rgba(147,197,253,0.8)" : "rgba(255,255,255,0.35)" }}>
                   {l.desc}
                 </div>
               </div>
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                myLang === l.code ? "border-blue-600 bg-blue-600" : "border-gray-300"
-              }`}>
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
+                style={{
+                  border: myLang === l.code ? "2px solid #3b82f6" : "2px solid rgba(255,255,255,0.2)",
+                  background: myLang === l.code ? "#3b82f6" : "transparent",
+                }}
+              >
                 {myLang === l.code && <div className="w-2 h-2 bg-white rounded-full" />}
               </div>
             </button>
           ))}
         </div>
-        <div className="bg-gray-50 rounded-xl p-3 mb-5 flex items-center justify-center gap-3">
-          <span className="text-sm font-medium text-gray-700">{langFlag(myLang)} {langLabel(myLang)}</span>
-          <Languages className="w-4 h-4 text-blue-500" />
-          <span className="text-sm font-medium text-gray-700">{langFlag(tgtLang)} {langLabel(tgtLang)}</span>
+
+        {/* Flow preview */}
+        <div className="mx-8 mb-6 px-4 py-3 rounded-xl flex items-center justify-center gap-3" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <span className="text-sm text-white/70">{langFlag(myLang)} {langLabel(myLang)}</span>
+          <Languages className="w-4 h-4 text-blue-400" />
+          <span className="text-sm text-white/70">{langFlag(tgtLang)} {langLabel(tgtLang)}</span>
         </div>
-        <button
-          onClick={() => onConfirm(myLang, tgtLang)}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors"
-        >
-          Join Meeting
+
+        {/* Confirm */}
+        <div className="px-8 pb-8">
+          <button
+            onClick={() => onConfirm(myLang, tgtLang)}
+            className="w-full py-3 rounded-xl font-semibold text-sm text-white transition-all duration-200 hover:opacity-90 active:scale-[0.98]"
+            style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)" }}
+          >
+            Join Meeting
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function Toast({ toast, onRetry, onDefault, onDismiss }) {
+  if (!toast) return null;
+  const colors = {
+    warning: { bg: "#fffbeb", border: "#fcd34d", text: "#92400e" },
+    error:   { bg: "#fef2f2", border: "#fca5a5", text: "#991b1b" },
+    info:    { bg: "#eff6ff", border: "#93c5fd", text: "#1e40af" },
+    success: { bg: "#f0fdf4", border: "#86efac", text: "#166534" },
+  };
+  const c = colors[toast.type] || colors.info;
+  return (
+    <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-50 max-w-sm w-full mx-4">
+      <div className="flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl text-sm font-medium"
+        style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text }}>
+        <p className="flex-1">{toast.msg}</p>
+        {(toast.type === "warning" || toast.type === "error") && (
+          <>
+            <button onClick={onRetry} className="px-3 py-1 text-xs bg-blue-600 text-white rounded-full font-medium">Retry</button>
+            <button onClick={onDefault} className="px-3 py-1 text-xs rounded-full font-medium" style={{ background: "rgba(0,0,0,0.1)" }}>Default</button>
+          </>
+        )}
+        <button onClick={onDismiss} className="p-1 rounded-full opacity-60 hover:opacity-100">
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     </div>
   );
 }
 
-// ─── Translation Bar ──────────────────────────────────────────────────────────
-function TranslationBar({ myLang, tgtLang, isTranslating, myCaption, peerCaption, peerName, latency }) {
+// ─── Connection Status Badge ──────────────────────────────────────────────────
+function StatusBadge({ peerConnected, connStatus, timer }) {
+  const fmt = (s) =>
+    `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  if (peerConnected) return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+      style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.3)", color: "#10b981" }}>
+      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+      <Clock className="w-3 h-3" />
+      {fmt(timer)}
+    </div>
+  );
   return (
-    <div className="w-full bg-black/60 backdrop-blur-md border-b border-white/10 px-4 py-2">
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5 bg-blue-600/30 border border-blue-500/40 rounded-full px-3 py-1 flex-shrink-0">
-          <span className="text-xs">{langFlag(myLang)}</span>
-          <Languages className="w-3 h-3 text-blue-300" />
-          <span className="text-xs">{langFlag(tgtLang)}</span>
-          {isTranslating && (
-            <div className="flex items-center gap-0.5 ml-1">
-              {[4, 6, 8, 6, 4].map((h, i) => (
-                <div
-                  key={i}
-                  className="w-0.5 bg-blue-400 rounded-full animate-pulse"
-                  style={{ height: h, animationDelay: `${i * 0.1}s` }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          {myCaption.original ? (
-            <div className="flex items-baseline gap-2 min-w-0">
-              <span className="text-white/50 text-xs flex-shrink-0">You:</span>
-              <span className="text-white text-xs truncate">{myCaption.original}</span>
-              {myCaption.translated && (
-                <>
-                  <span className="text-white/30 text-xs flex-shrink-0">→</span>
-                  <span className="text-blue-300 text-xs truncate">{myCaption.translated}</span>
-                </>
-              )}
-            </div>
-          ) : (
-            <span className="text-white/30 text-xs">Listening…</span>
-          )}
-        </div>
-        {peerCaption.original && (
-          <div className="flex-1 min-w-0 hidden sm:block">
-            <div className="flex items-baseline gap-2 min-w-0">
-              <span className="text-white/50 text-xs flex-shrink-0">{peerName || "Peer"}:</span>
-              <span className="text-white text-xs truncate">{peerCaption.original}</span>
-              {peerCaption.translated && (
-                <>
-                  <span className="text-white/30 text-xs flex-shrink-0">→</span>
-                  <span className="text-green-300 text-xs truncate">{peerCaption.translated}</span>
-                </>
-              )}
-            </div>
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+      style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b" }}>
+      <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+      {connStatus === "disconnected" ? "Peer left" : "Waiting for peer…"}
+    </div>
+  );
+}
+
+// ─── Video Tile ───────────────────────────────────────────────────────────────
+function VideoTile({ videoRef, muted, label, isLocal, isScreenSharing, isConnected, caption, accentColor, isSpeaking, isHost }) {
+  return (
+    <div className="relative rounded-2xl overflow-hidden h-full transition-all duration-150"
+      style={{
+        background: isLocal ? "linear-gradient(135deg, #1e1b4b, #0f0a2e)" : "linear-gradient(135deg, #0c1a2e, #061020)",
+        border: isSpeaking
+          ? "2px solid rgba(34,197,94,0.85)"
+          : `1px solid rgba(${isLocal ? "139,92,246" : "59,130,246"},0.2)`,
+        boxShadow: isSpeaking ? "0 0 16px rgba(34,197,94,0.35)" : "none",
+      }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={muted}
+        className="w-full h-full object-cover"
+        style={{ transform: isLocal && !isScreenSharing ? "scaleX(-1)" : "none" }}
+      />
+
+      {/* No video fallback */}
+      {!isConnected && !isLocal && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center text-white font-bold text-xl"
+            style={{ background: "rgba(59,130,246,0.2)", border: "2px solid rgba(59,130,246,0.4)" }}>
+            ?
           </div>
-        )}
-        {latency && <div className="flex-shrink-0 text-xs text-white/30">{latency}ms</div>}
+          <p className="text-white/40 text-sm">Waiting for peer…</p>
+        </div>
+      )}
+
+      {/* Caption overlay */}
+      {caption?.original && (
+        <div className="absolute top-3 left-3 right-3 px-3 py-2 rounded-xl backdrop-blur-md"
+          style={{ background: "rgba(0,0,0,0.75)", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <p className="text-white/70 text-xs leading-snug">{caption.original}</p>
+          {caption.translated && (
+            <p className="text-xs font-medium leading-snug mt-0.5" style={{ color: accentColor }}>{caption.translated}</p>
+          )}
+        </div>
+      )}
+
+      {/* Name tag + host badge + speaking indicator */}
+      <div className="absolute bottom-3 left-3 flex items-center gap-1.5">
+        <div className="px-2.5 py-1 rounded-lg text-xs font-medium text-white flex items-center gap-1.5"
+          style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)" }}>
+          {isSpeaking && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />}
+          {label}
+          {isHost && (
+            <span className="ml-1 px-1.5 py-0.5 rounded text-white font-bold"
+              style={{ background: "rgba(59,130,246,0.8)", fontSize: "9px" }}>
+              HOST
+            </span>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+// ─── Control Button ───────────────────────────────────────────────────────────
+function CtrlBtn({ onClick, active, danger, icon: Icon, badge, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="relative w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 hover:scale-105"
+      style={{
+        background: danger
+          ? "rgba(239,68,68,0.9)"
+          : active
+          ? "rgba(59,130,246,0.9)"
+          : "rgba(255,255,255,0.1)",
+        border: danger
+          ? "1px solid rgba(239,68,68,0.5)"
+          : active
+          ? "1px solid rgba(59,130,246,0.5)"
+          : "1px solid rgba(255,255,255,0.15)",
+        backdropFilter: "blur(12px)",
+      }}
+    >
+      <Icon className="w-5 h-5 text-white" />
+      {badge > 0 && (
+        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-white text-xs flex items-center justify-center font-bold">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -166,12 +283,17 @@ export default function MeetingRoom() {
   const { meetingId } = useParams();
   const navigate      = useNavigate();
   const { settings, update } = useSettings();
-  const {session} = useSession();
+  const { session }   = useSession();
 
+  // ── Auth check ──
+  const userName = session?.user?.user_metadata?.full_name
+    || session?.user?.email?.split("@")[0]
+    || sessionStorage.getItem("userName")
+    || "You";
 
-  // Language state
-  const myLangRef  = useRef(settings.primaryLang);
-  const tgtLangRef = useRef(settings.secondaryLang);
+  // ── Language state ──
+  const myLangRef  = useRef(settings.primaryLang || "en");
+  const tgtLangRef = useRef(settings.secondaryLang || "ur");
   const [showLangDialog, setShowLangDialog] = useState(
     !sessionStorage.getItem(`langChosen_${meetingId}`)
   );
@@ -179,152 +301,80 @@ export default function MeetingRoom() {
     !!sessionStorage.getItem(`langChosen_${meetingId}`)
   );
 
-  // Core refs
-  const socketRef          = useRef(null);
-  const pcRef              = useRef(null);
-  const localStreamRef     = useRef(null);
-  const screenStreamRef    = useRef(null);
-  const localVideoRef      = useRef(null);
-  const remoteVideoRef     = useRef(null);
-  const makingOfferRef     = useRef(false);
-  const ignoreOfferRef     = useRef(false);
-  const isPoliteRef        = useRef(false);
-  const pendingCandidates  = useRef([]);
+  // ── Core refs ──
+  const socketRef         = useRef(null);
+  const pcRef             = useRef(null);
+  const localStreamRef    = useRef(null);
+  const screenStreamRef   = useRef(null);
+  const localVideoRef     = useRef(null);
+  const remoteVideoRef    = useRef(null);
+  const makingOfferRef    = useRef(false);
+  const ignoreOfferRef    = useRef(false);
+  const isPoliteRef       = useRef(false);
+  const pendingCandidates = useRef([]);
 
-  // Translation refs
-  const translationWsRef  = useRef(null);
-  const mediaRecorderRef  = useRef(null);
-  const myPeerIdRef       = useRef(null);
-  const translationOnRef  = useRef(false);
+  // ── Translation refs ──
+  const translationWsRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const myPeerIdRef      = useRef(null);
+  const translationOnRef = useRef(false);
 
-  // ─── FIX: AudioContext-based playback queue ──────────────────────────────
-  // Replaces Audio element approach which is blocked by autoplay policy.
-  // AudioContext is unlocked once on the first user gesture (any button click),
-  // then all subsequent .play() calls succeed without restriction.
-  const audioCtxRef       = useRef(null);   // single shared AudioContext
-  const audioQueueRef     = useRef([]);     // queue of ArrayBuffer (raw MP3 bytes)
-  const isPlayingRef      = useRef(false);  // mutex flag
+  // ── AudioContext queue ──
+  const audioCtxRef    = useRef(null);
+  const audioQueueRef  = useRef([]);
+  const isPlayingRef   = useRef(false);
 
-  useEffect(() => {
+  // ── Remote audio mute state ──
+  const remoteVideoMutedRef = useRef(false);
 
-    if(!session){
-      navigate('/signin')
-    }
-
-  }, [session])
-  
-
-  /**
-   * Lazily create or resume the AudioContext.
-   * Must be called inside a user-gesture handler at least once to unlock it.
-   * Returns null if AudioContext is not available.
-   */
-
-
-
-  const getAudioCtx = useCallback(() => {
-    if (!audioCtxRef.current) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return null;
-      audioCtxRef.current = new Ctx();
-    }
-    // Resume if suspended (happens after tab loses focus or before first gesture)
-    if (audioCtxRef.current.state === "suspended") {
-      audioCtxRef.current.resume().catch(() => {});
-    }
-    return audioCtxRef.current;
-  }, []);
-
-  /**
-   * Drain the audio queue sequentially.
-   * Each ArrayBuffer is decoded via AudioContext.decodeAudioData (handles MP3)
-   * and scheduled to play immediately after the previous clip ends.
-   * On error (corrupt frame, etc.) we skip and continue the queue.
-   */
-  const playNextInQueue = useCallback(() => {
-    if (isPlayingRef.current) return;           // already playing
-    if (audioQueueRef.current.length === 0) return; // nothing queued
-
-    const ctx = getAudioCtx();
-    if (!ctx) return;                           // browser unsupported
-
-    // If still suspended (no user gesture yet) skip — will retry on next chunk
-    if (ctx.state === "suspended") return;
-
-    isPlayingRef.current = true;
-    // Shift a defensive copy so the original buffer isn't transferred
-    const buffer = audioQueueRef.current.shift().slice(0);
-
-    ctx.decodeAudioData(
-      buffer,
-      (decoded) => {
-        const src = ctx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ctx.destination);
-        src.onended = () => {
-          isPlayingRef.current = false;
-          playNextInQueue();          // play next when this one ends
-        };
-        src.start(0);
-      },
-      (err) => {
-        // Decoding failed (e.g. truncated frame) — skip and continue
-        console.warn("[Audio] decode error, skipping chunk:", err?.message ?? err);
-        isPlayingRef.current = false;
-        playNextInQueue();
-      }
-    );
-  }, [getAudioCtx]);
-
-  // ── Unlock AudioContext on first user gesture ──────────────────────────────
-  // We call this in every control-bar button handler so the context is always
-  // warm before the first translated audio arrives.
-  const unlockAudioCtx = useCallback(() => {
-    getAudioCtx(); // creates + resumes
-  }, [getAudioCtx]);
-
-  // Cleanup AudioContext on unmount
-  useEffect(() => {
-    return () => {
-      audioCtxRef.current?.close().catch(() => {});
-      audioCtxRef.current = null;
-    };
-  }, []);
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Ref syncing
+  // ── Chat translation ref ──
   const chatAutoTranslateRef = useRef(true);
-  const peerNameRef = useRef("");
+  const peerNameRef          = useRef("");
 
-  // UI state
-  const [micOn,           setMicOn]           = useState(true);
-  const [cameraOn,        setCameraOn]         = useState(true);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [translationOn,   setTranslationOn]   = useState(false);
-  const [wsOpen,          setWsOpen]          = useState(false);
-  const [chatOpen,        setChatOpen]        = useState(false);
-  const [showLeaveModal,  setShowLeaveModal]  = useState(false);
-  const [timer,           setTimer]           = useState(0);
-  const [linkCopied,      setLinkCopied]      = useState(false);
-  const [chatInput,       setChatInput]       = useState("");
-  const [chatMessages,    setChatMessages]    = useState([]);
-  const [unreadCount,     setUnreadCount]     = useState(0);
-  const [peerConnected,   setPeerConnected]   = useState(false);
-  const [peerName,        setPeerName]        = useState("");
-  const [connStatus,      setConnStatus]      = useState("connecting");
-  const [isTranslating,   setIsTranslating]  = useState(false);
-  const [latency,         setLatency]         = useState(null);
-  const [myCaption,       setMyCaption]       = useState({ original: "", translated: "" });
-  const [peerCaption,     setPeerCaption]     = useState({ original: "", translated: "" });
-  const [participants,    setParticipants]    = useState([]);
-  const [mutedByHost,     setMutedByHost]     = useState(false);
-  const [toast,           setToast]           = useState(null);
-  const [sidebarTab,      setSidebarTab]      = useState("chat");
+  // ── UI state ──
+  const [micOn,            setMicOn]           = useState(true);
+  const [cameraOn,         setCameraOn]        = useState(true);
+  const [isScreenSharing,  setIsScreenSharing] = useState(false);
+  const [translationOn,    setTranslationOn]   = useState(false);
+  const [wsOpen,           setWsOpen]          = useState(false);
+  const [chatOpen,         setChatOpen]        = useState(false);
+  const [showLeaveModal,   setShowLeaveModal]  = useState(false);
+  const [timer,            setTimer]           = useState(0);
+  const [linkCopied,       setLinkCopied]      = useState(false);
+  const [chatInput,        setChatInput]       = useState("");
+  const [chatMessages,     setChatMessages]    = useState([]);
+  const [unreadCount,      setUnreadCount]     = useState(0);
+  const [peerConnected,    setPeerConnected]   = useState(false);
+  const [peerName,         setPeerName]        = useState("");
+  const [connStatus,       setConnStatus]      = useState("connecting");
+  const [isTranslating,    setIsTranslating]  = useState(false);
+  const [latency,          setLatency]         = useState(null);
+  const [myCaption,        setMyCaption]       = useState({ original: "", translated: "" });
+  const [peerCaption,      setPeerCaption]     = useState({ original: "", translated: "" });
+  const [participants,     setParticipants]    = useState([]);
+  const [mutedByHost,      setMutedByHost]     = useState(false);
+  const [toast,            setToast]           = useState(null);
+  const [sidebarTab,       setSidebarTab]      = useState("chat");
   const [chatAutoTranslate, setChatAutoTranslate] = useState(true);
+  const [showParticipants, setShowParticipants] = useState(false);
+  const [isPttRecording,   setIsPttRecording]  = useState(false);
+  // ── New state ──
+  const [isHost,           setIsHost]          = useState(false);
+  const [isSpeaking,       setIsSpeaking]      = useState(false);
+  const [peerSpeaking,     setPeerSpeaking]    = useState(false);
+  const [knockQueue,       setKnockQueue]      = useState([]);
+  const [isWaiting,        setIsWaiting]       = useState(false); // user is in waiting room
+  const speakingTimerRef   = useRef(null);
+  const peerSpeakingTimerRef = useRef(null);
+  const localAnalyserRef   = useRef(null);
+  const localAnalyserCtxRef = useRef(null);
+  const analyserAnimRef    = useRef(null);
 
-  const userName = sessionStorage.getItem("userName") || "You";
-
-  useEffect(() => { translationOnRef.current = translationOn; }, [translationOn]);
+  // ── Broadcast local speaking state to peer ────────────────────────────────
+  useEffect(() => {
+    if (!socketRef.current) return;
+    socketRef.current.emit("speaking:state", { speaking: isSpeaking });
+  }, [isSpeaking]);
   useEffect(() => { chatAutoTranslateRef.current = chatAutoTranslate; }, [chatAutoTranslate]);
   useEffect(() => { peerNameRef.current = peerName; }, [peerName]);
 
@@ -335,14 +385,131 @@ export default function MeetingRoom() {
     return () => clearInterval(t);
   }, [peerConnected]);
 
-  const formatTime = (s) =>
-    `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  // ── AudioContext helpers ──────────────────────────────────────────────────
+  const getAudioCtx = useCallback(() => {
+    if (!audioCtxRef.current) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      audioCtxRef.current = new Ctx();
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume().catch(() => {});
+    }
+    return audioCtxRef.current;
+  }, []);
 
-  // ─── MediaRecorder ────────────────────────────────────────────────────────
-  const startRecorder = useCallback(() => {
+  const playNextInQueue = useCallback(() => {
+    if (isPlayingRef.current) return;
+    if (audioQueueRef.current.length === 0) return;
+    const ctx = getAudioCtx();
+    if (!ctx || ctx.state === "suspended") return;
+
+    isPlayingRef.current = true;
+    const buffer = audioQueueRef.current.shift().slice(0);
+
+    ctx.decodeAudioData(
+      buffer,
+      (decoded) => {
+        const src  = ctx.createBufferSource();
+        // Apply TTS volume from settings via a GainNode
+        const gain = ctx.createGain();
+        gain.gain.value = settings.ttsVolume ?? 1.0;
+        src.buffer = decoded;
+        src.connect(gain);
+        gain.connect(ctx.destination);
+        src.onended = () => { isPlayingRef.current = false; playNextInQueue(); };
+        src.start(0);
+      },
+      (err) => {
+        console.warn("[Audio] decode error:", err?.message ?? err);
+        isPlayingRef.current = false;
+        playNextInQueue();
+      }
+    );
+  }, [getAudioCtx, settings.ttsVolume]);
+
+  // ✅ FIX 2: Unlock AudioContext eagerly on component mount (not deferred to first click).
+  //    This eliminates the ~100ms resume latency on the very first TTS playback.
+  useEffect(() => {
+    getAudioCtx();
+    return () => { audioCtxRef.current?.close().catch(() => {}); audioCtxRef.current = null; };
+  }, [getAudioCtx]);
+
+  // ── Local speaking detection via AnalyserNode ─────────────────────────────
+  // Uses a SEPARATE AudioContext — never touches audioCtxRef (TTS context).
+  // Starts only after getLocalMedia resolves (localStreamRef is set).
+  // Poll interval: 100ms — lightweight, does not affect STT pipeline.
+  const startSpeakingDetection = useCallback(() => {
+    // Clean up any existing detector first
+    clearTimeout(analyserAnimRef.current);
+    localAnalyserCtxRef.current?.close().catch(() => {});
+    localAnalyserCtxRef.current = null;
+
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+
+    const ctx = new Ctx();
+    localAnalyserCtxRef.current = ctx;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    // ⚠️ IMPORTANT: analyser is NOT connected to ctx.destination
+    // so mic audio is only analysed, never played back or mixed into TTS output
+    const micSrc = ctx.createMediaStreamSource(stream);
+    micSrc.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    const poll = () => {
+      if (!localAnalyserCtxRef.current) return; // stopped
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      if (avg > 14) {
+        setIsSpeaking(true);
+        clearTimeout(speakingTimerRef.current);
+        speakingTimerRef.current = setTimeout(() => setIsSpeaking(false), 900);
+      }
+      analyserAnimRef.current = setTimeout(poll, 100);
+    };
+    poll();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(analyserAnimRef.current);
+      clearTimeout(speakingTimerRef.current);
+      localAnalyserCtxRef.current?.close().catch(() => {});
+      localAnalyserCtxRef.current = null;
+    };
+  }, []);
+
+  // ── Mute/unmute remote video ──────────────────────────────────────────────
+  const applyRemoteVideoMute = useCallback((shouldMute) => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.muted = shouldMute;
+      remoteVideoMutedRef.current = shouldMute;
+    }
+  }, []);
+
+  // ── Waveform analyser refs ────────────────────────────────────────────────
+  const waveAudioCtxRef = useRef(null);
+  const waveAnalyserRef = useRef(null);
+  const waveAnimRef     = useRef(null);
+  const waveRecordStreamRef = useRef(null);
+
+  const stopWaveform = useCallback(() => {
+    cancelAnimationFrame(waveAnimRef.current);
+    waveAudioCtxRef.current?.close().catch(() => {});
+    waveAudioCtxRef.current = null;
+    waveAnalyserRef.current = null;
+    waveRecordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    waveRecordStreamRef.current = null;
+  }, []);
+
+  // ── MediaRecorder ─────────────────────────────────────────────────────────
+  const startRecorder = useCallback(async () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") return;
     if (!localStreamRef.current) return;
-
     const audioTracks = localStreamRef.current.getAudioTracks();
     if (!audioTracks.length) return;
 
@@ -356,47 +523,44 @@ export default function MeetingRoom() {
     } catch {
       recorder = new MediaRecorder(new MediaStream(audioTracks));
     }
-
     mediaRecorderRef.current = recorder;
 
-    recorder.ondataavailable = async (e) => {
-      // ── FIX: only send when translation is ON and WS is open ──
+    recorder.ondataavailable = (e) => {
       if (
-        e.data.size > 500 &&
-        translationOnRef.current &&                                // guard: toggle check
+        e.data &&
+        e.data.size > 0 &&
+        translationOnRef.current &&
         translationWsRef.current?.readyState === WebSocket.OPEN
       ) {
-        translationWsRef.current.send(await e.data.arrayBuffer());
+        translationWsRef.current.send(e.data);
         setIsTranslating(true);
         setTimeout(() => setIsTranslating(false), 500);
       }
     };
-
-    recorder.onerror = (e) => {
-      console.error("[MediaRecorder] Error:", e);
-      mediaRecorderRef.current = null;
-    };
-
+    recorder.onerror = () => { mediaRecorderRef.current = null; };
+    // ✅ FIX 1 applied: 500ms slices
     recorder.start(AUDIO_CHUNK_MS);
   }, []);
 
   const stopRecorder = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== "inactive") {
+      rec.stop();
+      // ✅ FIX 3: Reduced delay from 100ms → 0ms.
+      //    The final ondataavailable fires synchronously before stop() returns,
+      //    so there is no race condition — the last chunk is already in-flight.
+      if (translationWsRef.current?.readyState === WebSocket.OPEN) {
+        translationWsRef.current.send(JSON.stringify({ type: "end_of_speech" }));
+      }
     }
-  }, []);
+    mediaRecorderRef.current = null;
+    stopWaveform();
+  }, [stopWaveform]);
 
-  // ─── Translation WebSocket ─────────────────────────────────────────────────
-  // DESIGN: The WS is opened whenever a peer is present and stays open as long
-  // as there is a peer in the room. This allows RECEIVING translated audio from
-  // the peer even when our own translation toggle is OFF.
-  // The MediaRecorder (sending) is only started/stopped by the toggle.
+  // ── Translation WebSocket ─────────────────────────────────────────────────
   const openTranslationWS = useCallback(() => {
-    // Already open — just ensure recorder state matches toggle
     if (translationWsRef.current?.readyState === WebSocket.OPEN) {
       if (translationOnRef.current) startRecorder();
-      // If toggle is off, recorder is already stopped — nothing to do
       return;
     }
     if (!localStreamRef.current || !myPeerIdRef.current) {
@@ -408,7 +572,7 @@ export default function MeetingRoom() {
       `${PYTHON_WS_URL}/ws/translation/${meetingId}/${myPeerIdRef.current}`
     );
     translationWsRef.current = ws;
-    ws.binaryType = "arraybuffer";  // receive as ArrayBuffer directly
+    ws.binaryType = "blob";
 
     ws.onopen = () => {
       setWsOpen(true);
@@ -417,22 +581,17 @@ export default function MeetingRoom() {
         srcLang: myLangRef.current,
         tgtLang: tgtLangRef.current,
       }));
-      // Only start sending audio if translation is currently ON
       if (translationOnRef.current) startRecorder();
     };
 
-    ws.onmessage = (event) => {
-      // ── FIX: Binary frames are MP3 audio for THIS peer to play ──────────
-      // We receive ArrayBuffer (set via ws.binaryType = "arraybuffer").
-      // Push directly — no Blob conversion needed, decodeAudioData handles MP3.
-      if (event.data instanceof ArrayBuffer) {
-        if (event.data.byteLength < 100) return; // ignore tiny/empty frames
-        audioQueueRef.current.push(event.data);  // enqueue
-        playNextInQueue();                        // drain if idle
+    ws.onmessage = async (event) => {
+      if (event.data instanceof Blob) {
+        if (event.data.size < 100) return;
+        const arrayBuf = await event.data.arrayBuffer();
+        audioQueueRef.current.push(arrayBuf);
+        playNextInQueue();
         return;
       }
-
-      // Text frames are JSON metadata
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "transcript") {
@@ -442,11 +601,10 @@ export default function MeetingRoom() {
           setPeerCaption({ original: msg.original, translated: msg.translated });
           setLatency(msg.latency_ms);
         }
-      } catch { /* ignore parse errors */ }
+      } catch { /* ignore */ }
     };
 
     ws.onerror = () => setToast({ msg: "Translation service error.", type: "error" });
-
     ws.onclose = () => {
       setWsOpen(false);
       stopRecorder();
@@ -461,15 +619,16 @@ export default function MeetingRoom() {
     setWsOpen(false);
   }, [stopRecorder]);
 
-  // ─── Toggle Translation ────────────────────────────────────────────────────
-  // ON  → open WS (if not already open) + start recorder
-  // OFF → stop recorder only; WS stays open so we can still RECEIVE peer audio
+  // ── Toggle Translation ────────────────────────────────────────────────────
+  // ✅ FIX 4: No explicit unlockAudioCtx() needed here anymore — AudioContext
+  //    is already unlocked on mount. Kept for safety but it's a no-op.
   const toggleTranslation = useCallback(() => {
-    unlockAudioCtx(); // ensure AudioContext is live on this gesture
+    getAudioCtx(); // ensure resumed (no-op if already running)
     if (!translationOn) {
       translationOnRef.current = true;
       setTranslationOn(true);
-      openTranslationWS();                       // opens WS + starts recorder
+      applyRemoteVideoMute(true);
+      openTranslationWS();
       socketRef.current?.emit("translation:toggle", {
         enabled: true,
         srcLang: myLangRef.current,
@@ -478,19 +637,35 @@ export default function MeetingRoom() {
     } else {
       translationOnRef.current = false;
       setTranslationOn(false);
-      stopRecorder();                            // stop sending; WS stays open
+      setIsPttRecording(false);
+      applyRemoteVideoMute(false);
+      audioQueueRef.current = [];
+      stopRecorder();
       socketRef.current?.emit("translation:toggle", { enabled: false });
     }
-  }, [translationOn, openTranslationWS, stopRecorder, unlockAudioCtx]);
+  }, [translationOn, openTranslationWS, stopRecorder, getAudioCtx, applyRemoteVideoMute]);
 
-  // ─── Chat Translation ──────────────────────────────────────────────────────
+  // ── Push-to-Talk ──────────────────────────────────────────────────────────
+  const togglePtt = useCallback(() => {
+    if (!translationOn) return;
+    getAudioCtx();
+    if (!isPttRecording) {
+      setIsPttRecording(true);
+      startRecorder();
+    } else {
+      setIsPttRecording(false);
+      stopRecorder(); // fires end_of_speech immediately (0ms delay)
+    }
+  }, [translationOn, isPttRecording, startRecorder, stopRecorder, getAudioCtx]);
+
+  // ── Chat Translation ──────────────────────────────────────────────────────
   const translateChatMsg = useCallback(async (msgId, text, srcLang, tgtLang) => {
     if (!text || srcLang === tgtLang) return;
     try {
       const res = await fetch(`${PYTHON_HTTP}/translate`, {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ text, src_lang: srcLang, tgt_lang: tgtLang }),
+        body: JSON.stringify({ text, src_lang: srcLang, tgt_lang: tgtLang }),
       });
       const data = await res.json();
       if (data.translated) {
@@ -512,7 +687,7 @@ export default function MeetingRoom() {
     translateChatMsg(msg.id, msg.message, msg.senderLang, myLangRef.current);
   }, [translateChatMsg]);
 
-  // ─── WebRTC ────────────────────────────────────────────────────────────────
+  // ── WebRTC ────────────────────────────────────────────────────────────────
   const createPeerConnection = useCallback((targetId) => {
     pcRef.current?.close();
     const pc = new RTCPeerConnection(ICE_SERVERS);
@@ -523,18 +698,20 @@ export default function MeetingRoom() {
     );
 
     const remoteStream = new MediaStream();
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.muted = remoteVideoMutedRef.current;
+    }
+
     pc.ontrack = (e) => {
-      // e.streams[0] is preferred; fall back to e.track if streams is empty
-      if (e.streams && e.streams[0]) {
-        e.streams[0].getTracks().forEach((t) => {
-          if (!remoteStream.getTracks().includes(t)) remoteStream.addTrack(t);
-        });
-      } else {
-        if (!remoteStream.getTracks().includes(e.track)) remoteStream.addTrack(e.track);
+      const stream = e.streams?.[0] ?? new MediaStream([e.track]);
+      stream.getTracks().forEach((t) => {
+        if (!remoteStream.getTracks().includes(t)) remoteStream.addTrack(t);
+      });
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.muted = remoteVideoMutedRef.current;
       }
-      // Re-assign srcObject to force the video element to refresh
-      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
     };
 
     pc.onicecandidate = ({ candidate }) => {
@@ -552,9 +729,9 @@ export default function MeetingRoom() {
 
     pc.onnegotiationneeded = async () => {
       try {
-        if (pc.signalingState !== "stable") return; // check BEFORE any await
+        if (pc.signalingState !== "stable") return;
         makingOfferRef.current = true;
-        await pc.setLocalDescription();             // modern implicit-offer form
+        await pc.setLocalDescription();
         socketRef.current?.emit("webrtc:offer", { targetId, sdp: pc.localDescription });
       } catch (err) {
         console.error("[WebRTC] Offer:", err);
@@ -575,6 +752,8 @@ export default function MeetingRoom() {
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       setToast(null);
+      // Start speaking detection NOW — stream is ready
+      startSpeakingDetection();
       return stream;
     } catch (err) {
       const msg =
@@ -585,14 +764,13 @@ export default function MeetingRoom() {
       setToast({ msg, type: "warning" });
       return null;
     }
-  }, []);
+  }, [startSpeakingDetection]);
 
-  // ─── Screen Sharing ────────────────────────────────────────────────────────
+  // ── Screen Share ──────────────────────────────────────────────────────────
   const stopScreenShare = useCallback(async () => {
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
     setIsScreenSharing(false);
-
     const camTrack = localStreamRef.current?.getVideoTracks()[0];
     if (camTrack) {
       const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
@@ -605,32 +783,26 @@ export default function MeetingRoom() {
   }, []);
 
   const toggleScreenShare = useCallback(async () => {
-    unlockAudioCtx();
+    getAudioCtx();
     if (isScreenSharing) { await stopScreenShare(); return; }
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "always", displaySurface: "monitor" },
-        audio: false,
+        video: { cursor: "always" }, audio: false,
       });
       screenStreamRef.current = screenStream;
       const screenTrack = screenStream.getVideoTracks()[0];
-
       const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
       if (sender) await sender.replaceTrack(screenTrack).catch(console.error);
-
       if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
-
       setIsScreenSharing(true);
       socketRef.current?.emit("screen:share", { enabled: true });
       screenTrack.onended = stopScreenShare;
     } catch (err) {
-      if (err.name !== "NotAllowedError") {
-        setToast({ msg: "Screen sharing failed.", type: "error" });
-      }
+      if (err.name !== "NotAllowedError") setToast({ msg: "Screen sharing failed.", type: "error" });
     }
-  }, [isScreenSharing, stopScreenShare, unlockAudioCtx]);
+  }, [isScreenSharing, stopScreenShare, getAudioCtx]);
 
-  // ─── Main socket + WebRTC setup ───────────────────────────────────────────
+  // ── Main socket + WebRTC setup ────────────────────────────────────────────
   useEffect(() => {
     if (!langReady) return;
 
@@ -640,29 +812,27 @@ export default function MeetingRoom() {
     socket.on("connect", async () => {
       myPeerIdRef.current = socket.id;
       await getLocalMedia(settings.micDeviceId, settings.cameraDeviceId);
-      socket.emit("room:join", { roomId: meetingId, userName, userId: session.user.id,  });
+      socket.emit("room:join", { roomId: meetingId, userName, userId: session?.user?.id });
     });
 
-    socket.on("room:joined", ({ participants: initial }) => {
+    socket.on("room:joined", ({ participants: initial, isHost: iAmHost }) => {
       isPoliteRef.current = true;
+      setIsHost(!!iAmHost);
+      setIsWaiting(false); // admitted — clear waiting screen
       setParticipants(initial || []);
       const peer = (initial || [])[0];
       if (peer) {
         createPeerConnection(peer.peerId);
         setPeerConnected(true);
         setPeerName(peer.userName || "Peer");
-        // Open WS to be ready to receive — recorder starts only if autoTranslate
         openTranslationWS();
         if (settings.autoTranslate) {
           translationOnRef.current = true;
           setTranslationOn(true);
+          applyRemoteVideoMute(true);
           setTimeout(() => {
             startRecorder();
-            socket.emit("translation:toggle", {
-              enabled: true,
-              srcLang: myLangRef.current,
-              tgtLang: tgtLangRef.current,
-            });
+            socket.emit("translation:toggle", { enabled: true, srcLang: myLangRef.current, tgtLang: tgtLangRef.current });
           }, 800);
         }
       }
@@ -671,32 +841,23 @@ export default function MeetingRoom() {
     socket.on("peer:joined", async ({ peerId, userName: pName }) => {
       setPeerName(pName);
       setPeerConnected(true);
-      isPoliteRef.current = false; // host is always impolite
+      isPoliteRef.current = false;
       const pc = createPeerConnection(peerId);
-      // Explicitly kick off the offer — onnegotiationneeded may have fired
-      // before tracks were ready, so we send it manually here.
       try {
         await pc.setLocalDescription();
         socket.emit("webrtc:offer", { targetId: peerId, sdp: pc.localDescription });
-      } catch (err) {
-        console.error("[WebRTC] peer:joined offer:", err);
-      }
-      setParticipants((prev) => {
-        if (prev.find((p) => p.peerId === peerId)) return prev;
-        return [...prev, { peerId, userName: pName }];
-      });
-      // Open WS for receiving — do NOT auto-start recorder here
+      } catch (err) { console.error("[WebRTC] peer:joined offer:", err); }
+      setParticipants((prev) =>
+        prev.find((p) => p.peerId === peerId) ? prev : [...prev, { peerId, userName: pName }]
+      );
       openTranslationWS();
       if (settings.autoTranslate) {
         translationOnRef.current = true;
         setTranslationOn(true);
+        applyRemoteVideoMute(true);
         setTimeout(() => {
           startRecorder();
-          socket.emit("translation:toggle", {
-            enabled: true,
-            srcLang: myLangRef.current,
-            tgtLang: tgtLangRef.current,
-          });
+          socket.emit("translation:toggle", { enabled: true, srcLang: myLangRef.current, tgtLang: tgtLangRef.current });
         }, 500);
       }
     });
@@ -710,8 +871,10 @@ export default function MeetingRoom() {
       stopTranslationWS();
       translationOnRef.current = false;
       setTranslationOn(false);
-      // Drain and clear audio queue on peer disconnect
+      applyRemoteVideoMute(false);
       audioQueueRef.current = [];
+      setMyCaption({ original: "", translated: "" });
+      setPeerCaption({ original: "", translated: "" });
     });
 
     socket.on("room:participants", (list) => setParticipants(list));
@@ -720,7 +883,10 @@ export default function MeetingRoom() {
       localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = false));
       setMicOn(false);
       setMutedByHost(true);
+      setToast({ msg: "You have been muted by the host.", type: "info" });
+      setTimeout(() => setToast(null), 3000);
     });
+
     socket.on("host:unmute", () => {
       localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = true));
       setMicOn(true);
@@ -736,6 +902,38 @@ export default function MeetingRoom() {
           type: "info",
         });
         setTimeout(() => setToast(null), 3000);
+      }
+    });
+
+    // Host changed (when original host leaves)
+    socket.on("room:host-changed", ({ newHostId }) => {
+      setIsHost(newHostId === socket.id);
+    });
+
+    // Waiting room — someone is knocking
+    socket.on("room:knock", ({ peerId, userName: knockName }) => {
+      setKnockQueue((prev) => {
+        if (prev.find((k) => k.peerId === peerId)) return prev;
+        return [...prev, { peerId, userName: knockName }];
+      });
+    });
+
+    // Waiting room — user is waiting to be admitted
+    socket.on("room:waiting", () => setIsWaiting(true));
+    socket.on("room:rejected", () => {
+      setIsWaiting(false);
+      setToast({ msg: "Host did not admit you to this meeting.", type: "error" });
+      setTimeout(() => navigate("/dashboard"), 3000);
+    });
+
+    // Peer speaking — for border highlight
+    socket.on("peer:speaking", ({ peerId, speaking }) => {
+      if (peerId !== socket.id) {
+        setPeerSpeaking(speaking);
+        if (speaking) {
+          clearTimeout(peerSpeakingTimerRef.current);
+          peerSpeakingTimerRef.current = setTimeout(() => setPeerSpeaking(false), 1200);
+        }
       }
     });
 
@@ -755,9 +953,7 @@ export default function MeetingRoom() {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("webrtc:answer", { targetId: fromId, sdp: pc.localDescription });
-      } catch (err) {
-        console.error("[WebRTC] Offer handler:", err);
-      }
+      } catch (err) { console.error("[WebRTC] Offer handler:", err); }
     });
 
     socket.on("webrtc:answer", async ({ sdp }) => {
@@ -778,30 +974,18 @@ export default function MeetingRoom() {
     socket.on("chat:message", ({ fromId, userName: sender, message, senderLang, timestamp }) => {
       const isOwn = fromId === socket.id;
       const id = Date.now() + Math.random();
+      // senderLang comes from server — if missing, assume peer's opposite language
+      const resolvedSenderLang = senderLang || (isOwn ? myLangRef.current : (myLangRef.current === "en" ? "ur" : "en"));
       const needsTranslation =
-        !isOwn &&
-        senderLang &&
-        senderLang !== myLangRef.current &&
-        chatAutoTranslateRef.current;
+        !isOwn && resolvedSenderLang !== myLangRef.current && chatAutoTranslateRef.current;
 
       setChatMessages((prev) => [
         ...prev,
-        {
-          id,
-          sender: isOwn ? "You" : sender,
-          message,
-          translated: "",
-          translating: needsTranslation,
-          translateError: false,
-          isOwn,
-          timestamp,
-          senderLang,
-        },
+        { id, sender: isOwn ? "You" : sender, message, translated: "", translating: needsTranslation,
+          translateError: false, isOwn, timestamp, senderLang: resolvedSenderLang },
       ]);
 
-      if (needsTranslation) {
-        translateChatMsg(id, message, senderLang, myLangRef.current);
-      }
+      if (needsTranslation) translateChatMsg(id, message, resolvedSenderLang, myLangRef.current);
       if (!chatOpen && !isOwn) setUnreadCount((c) => c + 1);
     });
 
@@ -816,10 +1000,10 @@ export default function MeetingRoom() {
       stopTranslationWS();
       audioQueueRef.current = [];
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [langReady, meetingId]);
 
-  // ─── Handlers ─────────────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleLangConfirm = (myLang, tgtLang) => {
     myLangRef.current  = myLang;
     tgtLangRef.current = tgtLang;
@@ -830,7 +1014,7 @@ export default function MeetingRoom() {
   };
 
   const toggleMic = () => {
-    unlockAudioCtx();
+    getAudioCtx();
     if (mutedByHost) return;
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (!track) return;
@@ -839,7 +1023,7 @@ export default function MeetingRoom() {
   };
 
   const toggleCamera = () => {
-    unlockAudioCtx();
+    getAudioCtx();
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (!track) return;
     track.enabled = !track.enabled;
@@ -853,23 +1037,10 @@ export default function MeetingRoom() {
     const id = Date.now() + Math.random();
     setChatMessages((prev) => [
       ...prev,
-      {
-        id,
-        sender: "You",
-        message: text,
-        translated: "",
-        translating: false,
-        translateError: false,
-        isOwn: true,
-        timestamp: Date.now(),
-        senderLang: myLangRef.current,
-      },
+      { id, sender: "You", message: text, translated: "", translating: false,
+        translateError: false, isOwn: true, timestamp: Date.now(), senderLang: myLangRef.current },
     ]);
-    socketRef.current?.emit("chat:message", {
-      message: text,
-      senderLang: myLangRef.current,
-      timestamp: Date.now(),
-    });
+    socketRef.current?.emit("chat:message", { message: text, senderLang: myLangRef.current, timestamp: Date.now() });
   };
 
   const copyLink = () => {
@@ -878,255 +1049,344 @@ export default function MeetingRoom() {
     setTimeout(() => setLinkCopied(false), 2000);
   };
 
-  const openChat = () => { setChatOpen(true); setUnreadCount(0); };
-  const muteParticipant = (targetId) => socketRef.current?.emit("host:mute", { targetId });
+  const leaveMeeting = () => {
+    sessionStorage.removeItem(`langChosen_${meetingId}`);
+    navigate("/dashboard");
+  };
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  const muteParticipant = (targetId) => {
+    if (!isHost) return; // sirf host mute kar sakta hai
+    socketRef.current?.emit("host:mute", { targetId });
+  };
+
+  const admitKnock = (peerId) => {
+    socketRef.current?.emit("room:admit", { peerId });
+    setKnockQueue((prev) => prev.filter((k) => k.peerId !== peerId));
+  };
+
+  const rejectKnock = (peerId) => {
+    socketRef.current?.emit("room:reject", { peerId });
+    setKnockQueue((prev) => prev.filter((k) => k.peerId !== peerId));
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (!session?.user) return null;
+
+  // Waiting room — user knocked, waiting for host to admit
+  if (isWaiting) return (
+    <div className="h-screen flex flex-col items-center justify-center gap-6"
+      style={{ background: "#080c14" }}>
+      <div className="w-16 h-16 rounded-2xl flex items-center justify-center"
+        style={{ background: "linear-gradient(135deg, #3b82f6, #8b5cf6)" }}>
+        <Clock className="w-8 h-8 text-white animate-pulse" />
+      </div>
+      <div className="text-center">
+        <h2 className="text-xl font-semibold text-white mb-2">Waiting to be admitted</h2>
+        <p className="text-white/50 text-sm">The host will let you in shortly…</p>
+      </div>
+      <div className="flex gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="w-2 h-2 rounded-full bg-blue-400 animate-bounce"
+            style={{ animationDelay: `${i * 0.15}s` }} />
+        ))}
+      </div>
+      <button onClick={() => navigate("/dashboard")}
+        className="mt-4 px-6 py-2 rounded-xl text-sm transition-colors"
+        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)" }}>
+        Cancel
+      </button>
+    </div>
+  );
+
   return (
-    <div className="h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex flex-col overflow-hidden">
+    <div
+      className="h-screen flex flex-col overflow-hidden select-none"
+      style={{ background: "#080c14" }}
+    >
+      <style>{`
+        @keyframes ptt-pulse {
+          0%,100% { box-shadow: 0 0 0 0 rgba(200,75,47,0.5); }
+          50%      { box-shadow: 0 0 0 10px rgba(200,75,47,0); }
+        }
+      `}</style>
 
       {showLangDialog && (
-        <LanguageDialog
-          userName={userName}
-          defaultLang={settings.primaryLang}
-          onConfirm={handleLangConfirm}
-        />
+        <LanguageDialog userName={userName} defaultLang={settings.primaryLang} onConfirm={handleLangConfirm} />
       )}
 
-      {/* Toast notifications */}
-      {toast && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50">
-          <div className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl border ${
-            toast.type === "warning" ? "bg-yellow-50 border-yellow-300 text-yellow-800" :
-            toast.type === "error"   ? "bg-red-50 border-red-300 text-red-800" :
-            toast.type === "info"    ? "bg-blue-50 border-blue-300 text-blue-800" :
-            "bg-white border-gray-200 text-black"
-          }`}>
-            <p className="text-sm font-medium">{toast.msg}</p>
-            {(toast.type === "warning" || toast.type === "error") && (
-              <>
-                <button
-                  onClick={async () => { unlockAudioCtx(); setToast(null); await getLocalMedia(settings.micDeviceId, settings.cameraDeviceId); }}
-                  className="px-3 py-1 text-xs bg-blue-600 text-white rounded-full"
-                >
-                  Retry
-                </button>
-                <button
-                  onClick={async () => { unlockAudioCtx(); setToast(null); await getLocalMedia("default", "default"); }}
-                  className="px-3 py-1 text-xs bg-gray-200 text-black rounded-full"
-                >
-                  Default
-                </button>
-              </>
-            )}
-            <button onClick={() => setToast(null)} className="p-1 hover:bg-black/10 rounded-full">
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-      )}
+      <Toast
+        toast={toast}
+        onRetry={async () => { getAudioCtx(); setToast(null); await getLocalMedia(settings.micDeviceId, settings.cameraDeviceId); }}
+        onDefault={async () => { getAudioCtx(); setToast(null); await getLocalMedia("default", "default"); }}
+        onDismiss={() => setToast(null)}
+      />
 
-      {/* Header */}
-      <div className="bg-black/40 backdrop-blur-sm border-b border-white/10 px-4 py-3 flex items-center justify-between flex-shrink-0">
+      {/* ── Header ── */}
+      <div
+        className="flex items-center justify-between px-5 py-3 flex-shrink-0"
+        style={{ background: "rgba(8,12,20,0.95)", borderBottom: "1px solid rgba(255,255,255,0.06)", backdropFilter: "blur(20px)" }}
+      >
         <div className="flex items-center gap-3">
-          <h1 className="text-white font-medium text-sm">Meeting Room</h1>
-          {peerConnected ? (
-            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/20 rounded-full border border-green-500/30">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-green-400 text-xs font-medium">{formatTime(timer)}</span>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #3b82f6, #8b5cf6)" }}>
+              <Languages className="w-3.5 h-3.5 text-white" />
             </div>
-          ) : (
-            <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/20 rounded-full border border-yellow-500/30">
-              <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
-              <span className="text-yellow-400 text-xs font-medium">
-                {connStatus === "disconnected" ? "Peer left" : "Waiting for peer…"}
-              </span>
-            </div>
-          )}
+            <span className="text-white font-semibold text-sm hidden sm:block">SpeakSync</span>
+          </div>
+          <div className="w-px h-5 bg-white/10" />
+          <StatusBadge peerConnected={peerConnected} connStatus={connStatus} timer={timer} />
           {isScreenSharing && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-purple-500/20 rounded-full border border-purple-500/30">
-              <Monitor className="w-3 h-3 text-purple-400" />
-              <span className="text-purple-400 text-xs font-medium">Sharing Screen</span>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+              style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.3)", color: "#a78bfa" }}>
+              <Monitor className="w-3 h-3" />
+              Sharing Screen
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {peerConnected ? (
-            <Wifi className="w-4 h-4 text-green-400" />
-          ) : (
-            <WifiOff className="w-4 h-4 text-yellow-400" />
+
+        <div className="flex items-center gap-3">
+          {wsOpen && latency && (
+            <div className="hidden sm:flex items-center gap-1.5 text-xs" style={{ color: "rgba(255,255,255,0.35)" }}>
+              <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+              {latency}ms
+            </div>
           )}
+
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white"
+              style={{ background: "linear-gradient(135deg, #3b82f6, #8b5cf6)" }}>
+              {userName?.[0]?.toUpperCase() || "U"}
+            </div>
+            <span className="text-white/70 text-xs hidden sm:block">{userName}</span>
+          </div>
+
           <button
             onClick={copyLink}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs border border-white/20"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200"
+            style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" }}
           >
-            {linkCopied ? <><Check className="w-3 h-3" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Link</>}
+            {linkCopied ? <><Check className="w-3 h-3 text-emerald-400" /> Copied!</> : <><Copy className="w-3 h-3" /> Copy Link</>}
           </button>
         </div>
       </div>
 
-      {wsOpen && (
-        <TranslationBar
-          myLang={myLangRef.current}
-          tgtLang={tgtLangRef.current}
-          isTranslating={isTranslating}
-          myCaption={myCaption}
-          peerCaption={peerCaption}
-          peerName={peerName}
-          latency={latency}
-        />
+      {/* ── Knock / Waiting Room Notification (host only) ── */}
+      {isHost && knockQueue.length > 0 && (
+        <div className="flex-shrink-0 px-4 py-3 space-y-2"
+          style={{ background: "rgba(245,158,11,0.1)", borderBottom: "1px solid rgba(245,158,11,0.2)" }}>
+          {knockQueue.map((k) => (
+            <div key={k.peerId} className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                  style={{ background: "rgba(245,158,11,0.2)", color: "#f59e0b" }}>
+                  {k.userName?.[0]?.toUpperCase() || "?"}
+                </div>
+                <span className="text-sm text-white/80 font-medium">{k.userName}</span>
+                <span className="text-xs text-white/40">wants to join</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => admitKnock(k.peerId)}
+                  className="px-3 py-1 rounded-lg text-xs font-medium text-white"
+                  style={{ background: "#16a34a" }}>
+                  Admit
+                </button>
+                <button onClick={() => rejectKnock(k.peerId)}
+                  className="px-3 py-1 rounded-lg text-xs font-medium"
+                  style={{ background: "rgba(239,68,68,0.2)", color: "#f87171" }}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* Main area */}
-      <div className="flex-1 flex relative overflow-hidden">
-        <div className="flex-1 p-2 sm:p-4">
-          <div className="h-full grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
-
-            {/* Remote video */}
-            <div className="bg-gradient-to-br from-blue-900 to-gray-900 rounded-xl overflow-hidden relative border border-white/20 shadow-2xl">
-              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-              {!peerConnected && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-                  <div className="w-16 h-16 bg-blue-900/60 rounded-full flex items-center justify-center text-xl text-white font-bold border-2 border-white/20">
-                    {peerName?.[0]?.toUpperCase() || "?"}
-                  </div>
-                  <p className="text-sm text-gray-400">Waiting for peer…</p>
-                </div>
-              )}
-              {peerConnected && (
-                <div className="absolute bottom-3 left-3 bg-black/70 px-2 py-1 rounded-lg">
-                  <span className="text-white text-xs">{peerName || "Peer"}</span>
-                </div>
-              )}
-              {translationOn && settings.showCaptions && peerCaption.translated && (
-                <div className="absolute top-2 left-2 right-2 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-1.5">
-                  <p className="text-gray-300 text-xs leading-tight">{peerCaption.original}</p>
-                  <p className="text-blue-300 text-xs font-medium leading-tight mt-0.5">{peerCaption.translated}</p>
-                </div>
-              )}
-            </div>
-
-            {/* Local video */}
-            <div className="bg-gradient-to-br from-purple-900 to-gray-900 rounded-xl overflow-hidden relative border border-white/20 shadow-2xl">
-              <video
-                ref={localVideoRef}
-                autoPlay muted playsInline
-                className={`w-full h-full object-cover ${isScreenSharing ? "" : "scale-x-[-1]"}`}
-              />
-              {!cameraOn && !isScreenSharing && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80">
-                  <VideoOff className="w-12 h-12 text-gray-600" />
-                </div>
-              )}
-              <div className="absolute bottom-3 left-3 bg-black/70 px-2 py-1 rounded-lg">
-                <span className="text-white text-xs">
-                  {isScreenSharing ? "🖥 Your Screen" : `${userName} (You)`}
-                </span>
+      {/* ── Translation Bar ── */}
+      {wsOpen && (
+        <div
+          className="flex items-center gap-3 px-4 py-2 flex-shrink-0"
+          style={{ background: "rgba(17,24,39,0.8)", borderBottom: "1px solid rgba(59,130,246,0.15)", backdropFilter: "blur(12px)" }}
+        >
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full flex-shrink-0"
+            style={{ background: translationOn ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.06)", border: `1px solid ${translationOn ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.08)"}` }}>
+            <span className="text-xs">{langFlag(myLangRef.current)}</span>
+            <Languages className={`w-3 h-3 ${translationOn ? "text-blue-400" : "text-white/30"}`} />
+            <span className="text-xs">{langFlag(tgtLangRef.current)}</span>
+            {isTranslating && (
+              <div className="flex items-center gap-px ml-1">
+                {[3, 5, 7, 5, 3].map((h, i) => (
+                  <div key={i} className="w-px bg-blue-400 rounded-full animate-pulse"
+                    style={{ height: h, animationDelay: `${i * 0.1}s` }} />
+                ))}
               </div>
-              {translationOn && settings.showCaptions && myCaption.translated && (
-                <div className="absolute top-2 left-2 right-2 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-1.5">
-                  <p className="text-gray-300 text-xs leading-tight">{myCaption.original}</p>
-                  <p className="text-green-300 text-xs font-medium leading-tight mt-0.5 text-right">{myCaption.translated}</p>
-                </div>
-              )}
-              {mutedByHost && (
-                <div className="absolute top-2 right-2 bg-red-600 px-2 py-1 rounded-lg flex items-center gap-1">
-                  <MicOff className="w-3 h-3 text-white" />
-                  <span className="text-white text-xs">Muted by host</span>
-                </div>
-              )}
-            </div>
+            )}
           </div>
+
+          <div className="flex-1 min-w-0">
+            {myCaption.original ? (
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="text-xs flex-shrink-0" style={{ color: "rgba(255,255,255,0.35)" }}>You:</span>
+                <span className="text-xs text-white/80 truncate">{myCaption.original}</span>
+                {myCaption.translated && (
+                  <>
+                    <span className="text-xs flex-shrink-0" style={{ color: "rgba(255,255,255,0.2)" }}>→</span>
+                    <span className="text-xs text-blue-300 truncate">{myCaption.translated}</span>
+                  </>
+                )}
+              </div>
+            ) : (
+              <span className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>
+                {translationOn ? "Listening…" : "Translation paused — peer voice playing"}
+              </span>
+            )}
+          </div>
+
+          <div className="flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-medium"
+            style={{ background: translationOn ? "rgba(59,130,246,0.15)" : "rgba(255,255,255,0.05)", color: translationOn ? "#93c5fd" : "rgba(255,255,255,0.3)" }}>
+            {translationOn ? "TTS on" : "Original voice"}
+          </div>
+
+          {peerCaption.original && (
+            <div className="flex-1 min-w-0 hidden sm:block">
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="text-xs flex-shrink-0" style={{ color: "rgba(255,255,255,0.35)" }}>{peerName || "Peer"}:</span>
+                <span className="text-xs text-white/80 truncate">{peerCaption.original}</span>
+                {peerCaption.translated && (
+                  <>
+                    <span className="text-xs flex-shrink-0" style={{ color: "rgba(255,255,255,0.2)" }}>→</span>
+                    <span className="text-xs text-emerald-300 truncate">{peerCaption.translated}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Main Content Area ── */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Video Grid */}
+        <div className="flex-1 p-3 sm:p-4 flex flex-col sm:grid sm:grid-cols-2 gap-3 sm:gap-4 overflow-hidden">
+          <VideoTile
+            videoRef={remoteVideoRef}
+            muted={false}
+            label={peerConnected ? (peerName || "Peer") : "Waiting…"}
+            isLocal={false}
+            isScreenSharing={false}
+            isConnected={peerConnected}
+            caption={translationOn && settings.showCaptions ? peerCaption : null}
+            accentColor="#93c5fd"
+            isSpeaking={peerSpeaking}
+            isHost={!isHost && peerConnected}
+          />
+
+          <VideoTile
+            videoRef={localVideoRef}
+            muted={true}
+            label={isScreenSharing ? "🖥 Your Screen" : `${userName} (You)`}
+            isLocal={true}
+            isScreenSharing={isScreenSharing}
+            isConnected={true}
+            caption={translationOn && settings.showCaptions ? myCaption : null}
+            accentColor="#6ee7b7"
+            isSpeaking={isSpeaking}
+            isHost={isHost}
+          />
         </div>
 
-        {/* Sidebar: Chat + People */}
+        {/* ── Chat Sidebar ── */}
         {chatOpen && (
-          <div className="absolute sm:relative right-0 top-0 bottom-0 w-full sm:w-80 lg:w-96 bg-white border-l border-gray-200 flex flex-col shadow-2xl z-20">
-            <div className="flex items-center border-b border-gray-200">
-              <button
-                onClick={() => setSidebarTab("chat")}
-                className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 ${
-                  sidebarTab === "chat" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <MessageSquare className="w-4 h-4" /> Chat
-                {unreadCount > 0 && sidebarTab !== "chat" && (
-                  <span className="w-4 h-4 bg-red-600 rounded-full text-white text-xs flex items-center justify-center">
-                    {unreadCount}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setSidebarTab("people")}
-                className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 ${
-                  sidebarTab === "people" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <Users className="w-4 h-4" /> People ({participants.length + 1})
-              </button>
-              <button onClick={() => setChatOpen(false)} className="p-3 hover:bg-gray-100">
-                <X className="w-4 h-4 text-gray-500" />
+          <div
+            className="absolute sm:relative right-0 top-0 bottom-0 w-full sm:w-80 lg:w-96 flex flex-col z-20"
+            style={{ background: "#0d1117", borderLeft: "1px solid rgba(255,255,255,0.07)" }}
+          >
+            <div className="flex flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+              {["chat", "people"].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setSidebarTab(tab)}
+                  className="flex-1 py-3.5 text-xs font-medium flex items-center justify-center gap-2 transition-colors"
+                  style={{
+                    color: sidebarTab === tab ? "#60a5fa" : "rgba(255,255,255,0.4)",
+                    borderBottom: sidebarTab === tab ? "2px solid #3b82f6" : "2px solid transparent",
+                    background: "transparent",
+                  }}
+                >
+                  {tab === "chat" ? <MessageSquare className="w-3.5 h-3.5" /> : <Users className="w-3.5 h-3.5" />}
+                  {tab === "chat" ? "Chat" : `People (${participants.length + 1})`}
+                  {tab === "chat" && unreadCount > 0 && sidebarTab !== "chat" && (
+                    <span className="w-4 h-4 bg-red-500 rounded-full text-white text-xs flex items-center justify-center">{unreadCount}</span>
+                  )}
+                </button>
+              ))}
+              <button onClick={() => setChatOpen(false)} className="px-4 transition-colors" style={{ color: "rgba(255,255,255,0.3)" }}>
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {sidebarTab === "chat" && (
               <>
-                <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-100">
+                <div className="px-4 py-2.5 flex items-center justify-between flex-shrink-0"
+                  style={{ background: "rgba(59,130,246,0.06)", borderBottom: "1px solid rgba(59,130,246,0.1)" }}>
                   <div className="flex items-center gap-2">
-                    <Languages className="w-4 h-4 text-blue-600" />
-                    <span className="text-xs font-medium text-blue-700">Auto-translate messages</span>
+                    <Languages className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-xs text-blue-300/80">Auto-translate messages</span>
                   </div>
                   <button
                     onClick={() => setChatAutoTranslate((v) => !v)}
-                    className={`relative w-9 h-5 rounded-full transition-colors ${
-                      chatAutoTranslate ? "bg-blue-600" : "bg-gray-300"
-                    }`}
+                    className="relative w-9 h-5 rounded-full transition-colors duration-200"
+                    style={{ background: chatAutoTranslate ? "#3b82f6" : "rgba(255,255,255,0.15)" }}
                   >
-                    <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      chatAutoTranslate ? "translate-x-4" : "translate-x-0.5"
-                    }`} />
+                    <span
+                      className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200"
+                      style={{ transform: chatAutoTranslate ? "translateX(16px)" : "translateX(2px)" }}
+                    />
                   </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
                   {chatMessages.length === 0 && (
-                    <p className="text-gray-400 text-sm text-center mt-8">No messages yet</p>
+                    <div className="flex flex-col items-center justify-center mt-16 gap-3">
+                      <MessageSquare className="w-8 h-8" style={{ color: "rgba(255,255,255,0.1)" }} />
+                      <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>No messages yet</p>
+                    </div>
                   )}
                   {chatMessages.map((msg) => (
                     <div key={msg.id} className={`flex flex-col ${msg.isOwn ? "items-end" : "items-start"}`}>
-                      <span className="text-xs text-gray-500 mb-1">{msg.sender}</span>
-                      <div className={`max-w-[80%] px-3 py-2 rounded-xl text-sm ${
-                        msg.isOwn ? "bg-blue-600 text-white" : "bg-gray-100 text-black"
-                      }`}>
+                      <span className="text-xs mb-1" style={{ color: "rgba(255,255,255,0.3)" }}>{msg.sender}</span>
+                      <div
+                        className="max-w-[80%] px-3 py-2.5 rounded-xl text-sm"
+                        style={{
+                          background: msg.isOwn ? "#2563eb" : "rgba(255,255,255,0.08)",
+                          border: msg.isOwn ? "none" : "1px solid rgba(255,255,255,0.07)",
+                          color: msg.isOwn ? "white" : "rgba(255,255,255,0.85)",
+                        }}
+                      >
                         <p>{msg.message}</p>
                         {!msg.isOwn && (
                           <>
                             {msg.translating && (
-                              <p className="text-xs text-gray-400 italic mt-1 flex items-center gap-1">
+                              <p className="text-xs italic mt-1.5 flex items-center gap-1" style={{ color: "rgba(255,255,255,0.35)" }}>
                                 <RefreshCw className="w-3 h-3 animate-spin" /> Translating…
                               </p>
                             )}
                             {msg.translated && msg.translated !== msg.message && (
-                              <div className="mt-1.5 pt-1.5 border-t border-gray-200">
-                                <p className="text-xs text-gray-400 mb-0.5">
-                                  {langFlag(tgtLangRef.current)} Translation
+                              <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                                <p className="text-xs mb-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>
+                                  {langFlag(myLangRef.current)} Translation
                                 </p>
-                                <p className="text-xs text-blue-700 font-medium">{msg.translated}</p>
+                                <p className="text-xs text-blue-300 font-medium">{msg.translated}</p>
                               </div>
                             )}
                             {msg.translateError && (
-                              <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                              <p className="text-xs text-red-400 mt-1.5 flex items-center gap-1">
                                 Translation failed.{" "}
-                                <button onClick={() => retranslateMsg(msg)} className="underline hover:no-underline">
-                                  Retry
-                                </button>
+                                <button onClick={() => retranslateMsg(msg)} className="underline">Retry</button>
                               </p>
                             )}
                             {!chatAutoTranslate && !msg.translated && !msg.translating && msg.senderLang && msg.senderLang !== myLangRef.current && (
-                              <button
-                                onClick={() => retranslateMsg(msg)}
-                                className="mt-1 text-xs text-blue-500 hover:underline flex items-center gap-1"
-                              >
+                              <button onClick={() => retranslateMsg(msg)}
+                                className="mt-1.5 text-xs text-blue-400 flex items-center gap-1 hover:underline">
                                 <Languages className="w-3 h-3" /> Translate
                               </button>
                             )}
@@ -1137,168 +1397,183 @@ export default function MeetingRoom() {
                   ))}
                 </div>
 
-                <div className="p-4 border-t border-gray-200 flex gap-2">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && sendChat()}
-                    placeholder={`Type in ${langLabel(myLangRef.current)}…`}
-                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
-                  />
-                  <button onClick={sendChat} className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">
-                    <Send className="w-4 h-4" />
-                  </button>
+                <div className="p-4 flex-shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && sendChat()}
+                      placeholder={`Type in ${langLabel(myLangRef.current)}…`}
+                      className="flex-1 px-3 py-2.5 rounded-xl text-sm text-white outline-none"
+                      style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}
+                    />
+                    <button onClick={sendChat} className="p-2.5 rounded-xl transition-colors" style={{ background: "#2563eb" }}>
+                      <Send className="w-4 h-4 text-white" />
+                    </button>
+                  </div>
                 </div>
               </>
             )}
 
             {sidebarTab === "people" && (
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 bg-blue-100 rounded-full flex items-center justify-center text-sm font-bold text-blue-700">
-                      {userName?.[0]?.toUpperCase() || "Y"}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-black">{userName} (You)</p>
-                      <p className="text-xs text-gray-400">
-                        {langFlag(myLangRef.current)} {langLabel(myLangRef.current)}
-                      </p>
-                    </div>
+                <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold"
+                    style={{ background: "linear-gradient(135deg, #3b82f6, #8b5cf6)", color: "white" }}>
+                    {userName?.[0]?.toUpperCase() || "Y"}
                   </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-white">{userName} <span className="text-xs text-white/30">(You)</span></p>
+                    <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+                      {langFlag(myLangRef.current)} {langLabel(myLangRef.current)}
+                    </p>
+                  </div>
+                  <Shield className="w-3.5 h-3.5 text-blue-400" />
                 </div>
-                {participants
-                  .filter((p) => p.peerId !== myPeerIdRef.current)
-                  .map((p) => (
-                    <div key={p.peerId} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-purple-100 rounded-full flex items-center justify-center text-sm font-bold text-purple-700">
-                          {p.userName?.[0]?.toUpperCase() || "?"}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-black">{p.userName}</p>
-                          <p className="text-xs text-gray-400">Participant</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => muteParticipant(p.peerId)}
-                        title="Mute participant"
-                        className="p-1.5 hover:bg-gray-200 rounded-lg transition-colors"
-                      >
-                        <MicOff className="w-4 h-4 text-gray-500" />
-                      </button>
+
+                {participants.filter((p) => p.peerId !== myPeerIdRef.current).map((p) => (
+                  <div key={p.peerId} className="flex items-center gap-3 p-3 rounded-xl"
+                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold"
+                      style={{ background: "rgba(139,92,246,0.2)", color: "#a78bfa", border: "1px solid rgba(139,92,246,0.3)" }}>
+                      {p.userName?.[0]?.toUpperCase() || "?"}
                     </div>
-                  ))}
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-white">{p.userName}</p>
+                      <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Participant</p>
+                    </div>
+                    <button onClick={() => muteParticipant(p.peerId)}
+                      className="p-1.5 rounded-lg transition-colors hover:bg-white/10"
+                      title={isHost ? "Mute participant" : "Only host can mute"}
+                      style={{ opacity: isHost ? 1 : 0.3, cursor: isHost ? "pointer" : "not-allowed" }}>
+                      <MicOff className="w-3.5 h-3.5" style={{ color: "rgba(255,255,255,0.4)" }} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Leave confirm bar */}
+      {/* ── Leave Confirm Bar ── */}
       {showLeaveModal && (
-        <div className="border-t border-gray-200 bg-white shadow-xl flex-shrink-0">
-          <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium text-black">Leave this meeting?</p>
-              <p className="text-xs text-gray-600">You can rejoin anytime with the same link.</p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowLeaveModal(false)}
-                className="px-4 py-2 bg-gray-100 text-black rounded-lg text-sm font-medium hover:bg-gray-200"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { sessionStorage.removeItem(`langChosen_${meetingId}`); navigate("/dashboard"); }}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
-              >
-                Leave
-              </button>
-            </div>
+        <div
+          className="flex-shrink-0 flex items-center justify-between gap-4 px-5 py-4"
+          style={{ background: "#0d1117", borderTop: "1px solid rgba(239,68,68,0.2)" }}
+        >
+          <div>
+            <p className="text-sm font-medium text-white">Leave this meeting?</p>
+            <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.4)" }}>You can rejoin anytime with the same link.</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowLeaveModal(false)}
+              className="px-4 py-2 rounded-xl text-sm font-medium transition-colors"
+              style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.1)" }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={leaveMeeting}
+              className="px-4 py-2 rounded-xl text-sm font-medium text-white flex items-center gap-2"
+              style={{ background: "#dc2626" }}
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Leave
+            </button>
           </div>
         </div>
       )}
 
-      {/* Controls bar */}
-      <div className="bg-black/40 backdrop-blur-sm border-t border-white/10 px-3 py-3 flex items-center justify-center gap-2 sm:gap-3 flex-shrink-0">
-
-        <button
+      {/* ── Controls Bar ── */}
+      <div
+        className="flex items-center justify-center gap-3 sm:gap-4 px-4 py-4 flex-shrink-0"
+        style={{ background: "rgba(8,12,20,0.95)", borderTop: "1px solid rgba(255,255,255,0.06)", backdropFilter: "blur(20px)" }}
+      >
+        <CtrlBtn
           onClick={toggleMic}
+          active={false}
+          danger={!micOn || mutedByHost}
+          icon={micOn && !mutedByHost ? Mic : MicOff}
           title={micOn ? "Mute" : "Unmute"}
-          className={`w-11 h-11 rounded-full flex items-center justify-center ${
-            micOn && !mutedByHost
-              ? "bg-white/10 hover:bg-white/20 border border-white/20"
-              : "bg-red-600 hover:bg-red-700 border border-red-500"
-          }`}
-        >
-          {micOn && !mutedByHost ? <Mic className="w-5 h-5 text-white" /> : <MicOff className="w-5 h-5 text-white" />}
-        </button>
+        />
 
-        <button
+        <CtrlBtn
           onClick={toggleCamera}
+          active={false}
+          danger={!cameraOn}
+          icon={cameraOn ? Video : VideoOff}
           title={cameraOn ? "Stop Camera" : "Start Camera"}
-          className={`w-11 h-11 rounded-full flex items-center justify-center ${
-            cameraOn
-              ? "bg-white/10 hover:bg-white/20 border border-white/20"
-              : "bg-red-600 hover:bg-red-700 border border-red-500"
-          }`}
-        >
-          {cameraOn ? <Video className="w-5 h-5 text-white" /> : <VideoOff className="w-5 h-5 text-white" />}
-        </button>
+        />
 
-        <button
+        <CtrlBtn
           onClick={toggleScreenShare}
+          active={isScreenSharing}
+          danger={false}
+          icon={isScreenSharing ? MonitorOff : Monitor}
           title={isScreenSharing ? "Stop Screen Share" : "Share Screen"}
-          className={`w-11 h-11 rounded-full flex items-center justify-center ${
-            isScreenSharing
-              ? "bg-purple-600 hover:bg-purple-700 border border-purple-500"
-              : "bg-white/10 hover:bg-white/20 border border-white/20"
-          }`}
-        >
-          {isScreenSharing
-            ? <MonitorOff className="w-5 h-5 text-white" />
-            : <Monitor className="w-5 h-5 text-white" />
-          }
-        </button>
-
-        <button
-          onClick={openChat}
-          className={`w-11 h-11 rounded-full flex items-center justify-center relative ${
-            chatOpen
-              ? "bg-blue-600 hover:bg-blue-700 border border-blue-500"
-              : "bg-white/10 hover:bg-white/20 border border-white/20"
-          }`}
-        >
-          <MessageSquare className="w-5 h-5 text-white" />
-          {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 rounded-full text-white text-xs flex items-center justify-center">
-              {unreadCount}
-            </span>
-          )}
-        </button>
+        />
 
         <button
           onClick={toggleTranslation}
-          title={translationOn ? "Stop Translation" : "Start Translation"}
-          className={`w-11 h-11 rounded-full flex items-center justify-center ${
-            translationOn
-              ? "bg-blue-600 hover:bg-blue-700 border border-blue-500"
-              : "bg-white/10 hover:bg-white/20 border border-white/20"
-          }`}
+          title={translationOn ? "Stop Translation (restore original voice)" : "Start Translation (TTS voice)"}
+          className="relative flex flex-col items-center gap-1 px-4 py-2.5 rounded-2xl transition-all duration-200 active:scale-95"
+          style={{
+            background: translationOn ? "rgba(59,130,246,0.9)" : "rgba(255,255,255,0.08)",
+            border: translationOn ? "1px solid rgba(59,130,246,0.6)" : "1px solid rgba(255,255,255,0.12)",
+            minWidth: 56,
+          }}
         >
-          <Languages className="w-5 h-5 text-white" />
+          <div className="flex items-center gap-1.5">
+            <Languages className="w-4 h-4 text-white" />
+            {translationOn
+              ? <Volume2 className="w-3 h-3 text-blue-200" />
+              : <VolumeX className="w-3 h-3 text-white/50" />
+            }
+          </div>
+          <span className="text-white/60 text-xs leading-none">{translationOn ? "TTS" : "Original"}</span>
         </button>
 
-        <div className="w-px h-8 bg-white/20 mx-1" />
+        {translationOn && (
+          <button
+            onClick={togglePtt}
+            title={isPttRecording ? "Click to stop & send" : "Click to start speaking"}
+            className="relative flex flex-col items-center gap-1 px-4 py-2.5 rounded-2xl transition-all duration-200 active:scale-95"
+            style={{
+              background: isPttRecording ? "rgba(200,75,47,0.9)" : "rgba(255,255,255,0.08)",
+              border: isPttRecording ? "1px solid rgba(200,75,47,0.6)" : "1px solid rgba(255,255,255,0.12)",
+              minWidth: 56,
+              boxShadow: isPttRecording ? "0 0 0 4px rgba(200,75,47,0.25)" : "none",
+              animation: isPttRecording ? "ptt-pulse 1.4s ease-in-out infinite" : "none",
+            }}
+          >
+            <Mic className={`w-4 h-4 ${isPttRecording ? "text-white" : "text-white/60"}`} />
+            <span className="text-white/60 text-xs leading-none">
+              {isPttRecording ? "● REC" : "Speak"}
+            </span>
+          </button>
+        )}
+
+        <CtrlBtn
+          onClick={() => { setChatOpen((v) => !v); setUnreadCount(0); }}
+          active={chatOpen}
+          danger={false}
+          icon={MessageSquare}
+          badge={unreadCount}
+          title="Chat"
+        />
+
+        <div className="w-px h-8 mx-1" style={{ background: "rgba(255,255,255,0.1)" }} />
 
         <button
           onClick={() => setShowLeaveModal(true)}
-          className="w-11 h-11 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center border border-red-500"
+          className="flex items-center gap-2 px-5 py-3 rounded-full text-white text-sm font-medium transition-all duration-200 active:scale-95 hover:opacity-90"
+          style={{ background: "#dc2626", border: "1px solid rgba(220,38,38,0.5)" }}
         >
-          <PhoneOff className="w-5 h-5 text-white" />
+          <PhoneOff className="w-4 h-4" />
+          <span className="hidden sm:block">End</span>
         </button>
       </div>
     </div>

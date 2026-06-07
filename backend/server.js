@@ -1,18 +1,16 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
-import "dotenv/config";
-
 
 const app = express();
 const httpServer = createServer(app);
 
-// ─── Supabase admin client (service role key — never expose to frontend) ──────
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY  // use service role, not anon key
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 const io = new Server(httpServer, {
@@ -25,12 +23,11 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
-// ─── In-memory room store ─────────────────────────────────────────────────────
+// ─── In-memory stores ─────────────────────────────────────────────────────────
 // rooms: { [roomId]: { participants: Set<socketId>, hostId: string } }
 const rooms = new Map();
-
-// ─── Track participantRowId per socket for updating left_at later ─────────────
-// participantRows: { [socketId]: uuid (row id in meeting_participants) }
+// knockers: { [roomId]: Map<socketId, { userName, socket }> } — waiting room queue
+const knockers = new Map();
 const participantRows = new Map();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,6 +58,7 @@ async function leaveRoom(socket) {
 
   if (room.participants.size === 0) {
     rooms.delete(roomId);
+    knockers.delete(roomId);
     console.log(`[Room] ${roomId} deleted (empty)`);
   } else if (room.hostId === socket.id) {
     const [nextHost] = room.participants;
@@ -73,86 +71,104 @@ async function leaveRoom(socket) {
   socket.data.roomId = null;
   console.log(`[Socket] ${socket.id} left room ${roomId}`);
 
-  // ✅ Stamp left_at in Supabase
   const rowId = participantRows.get(socket.id);
   if (rowId) {
     const { error } = await supabase
       .from("meeting_participants")
       .update({ left_at: new Date().toISOString() })
       .eq("id", rowId);
-
-    if (error) {
-      console.error(`[Supabase] Failed to update left_at for row ${rowId}:`, error.message);
-    } else {
-      console.log(`[Supabase] left_at stamped for socket ${socket.id}`);
-    }
-
+    if (error) console.error(`[Supabase] left_at update failed:`, error.message);
     participantRows.delete(socket.id);
   }
 }
 
-// ─── Socket.io connection handler ────────────────────────────────────────────
+// ─── Socket.io ────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
 
   // ── JOIN ROOM ──────────────────────────────────────────────────────────────
-  // Client now emits: { roomId, userName, userId }  ← userId added
   socket.on("room:join", async ({ roomId, userName, userId }) => {
     if (!roomId || !userName) {
       socket.emit("room:error", { message: "roomId and userName are required" });
       return;
     }
 
-    leaveRoom(socket);
+    await leaveRoom(socket);
 
     let room = rooms.get(roomId);
     const isNewRoom = !room;
 
     if (isNewRoom) {
+      // First person creates the room and becomes host — no waiting room needed
       room = { participants: new Set(), hostId: socket.id };
       rooms.set(roomId, room);
-      console.log(`[Room] ${roomId} created by ${socket.id}`);
+      console.log(`[Room] ${roomId} created by ${socket.id} (${userName})`);
+    } else {
+      // Room exists — if full, send to waiting room (knock)
+      if (room.participants.size >= 2) {
+        socket.emit("room:error", { message: "Room is full" });
+        return;
+      }
+
+      // Room has space but already has a host — send knock to host, wait for admit
+      if (room.participants.size === 1) {
+        // Store knocker
+        if (!knockers.has(roomId)) knockers.set(roomId, new Map());
+        knockers.get(roomId).set(socket.id, { userName, socket });
+        socket.data.knockingRoom = roomId;
+        socket.data.userName = userName;
+        socket.data.userId = userId ?? null;
+
+        // Notify host
+        io.to(room.hostId).emit("room:knock", { peerId: socket.id, userName });
+        // Tell knocker they are waiting
+        socket.emit("room:waiting", { message: "Waiting for host to admit you…" });
+        console.log(`[Room] ${socket.id} (${userName}) is knocking on ${roomId}`);
+        return;
+      }
     }
 
-    if (room.participants.size >= 2) {
-      socket.emit("room:error", { message: "Room is full" });
-      return;
-    }
+    // Admit directly (either host or empty room)
+    await admitToRoom(socket, roomId, userName, userId, room, isNewRoom);
+  });
 
+  // ── ADMIT helper ───────────────────────────────────────────────────────────
+  async function admitToRoom(socket, roomId, userName, userId, room, isNewRoom) {
     room.participants.add(socket.id);
     socket.join(roomId);
     socket.data.roomId = roomId;
     socket.data.userName = userName;
     socket.data.userId = userId ?? null;
 
-    // ✅ Insert participant row into Supabase
     if (userId) {
-     const { data, error } = await supabase
-            .from("meeting_participants")
-            .insert({
-              room_id: roomId,
-              user_id: userId,
-              user_name: userName,        
-              joined_at: new Date().toISOString(),
-            })
-            .select("id")
-            .single();
-
-      if (error) {
-        console.error(`[Supabase] Failed to insert participant:`, error.message);
-      } else {
-        // Save the row id so we can stamp left_at on disconnect
-        participantRows.set(socket.id, data.id);
-        console.log(`[Supabase] Participant row created: ${data.id}`);
-      }
+      const { data, error } = await supabase
+        .from("meeting_participants")
+        .insert({
+          room_id: roomId,
+          user_id: userId,
+          user_name: userName,
+          joined_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
+      if (error) console.error(`[Supabase] insert failed:`, error.message);
+      else participantRows.set(socket.id, data.id);
     }
+
+    // Build participants list with userNames for the joining peer
+    const existingParticipants = [...room.participants]
+      .filter((id) => id !== socket.id)
+      .map((id) => {
+        const s = io.sockets.sockets.get(id);
+        return { peerId: id, userName: s?.data?.userName || "Peer" };
+      });
 
     socket.emit("room:joined", {
       roomId,
       peerId: socket.id,
-      isHost: isNewRoom,
+      isHost: room.hostId === socket.id,
       participantCount: room.participants.size,
-      participants: [...room.participants].filter((id) => id !== socket.id),
+      participants: existingParticipants,
     });
 
     socket.to(roomId).emit("peer:joined", {
@@ -162,30 +178,81 @@ io.on("connection", (socket) => {
     });
 
     console.log(`[Room] ${socket.id} (${userName}) joined ${roomId} | total: ${room.participants.size}`);
+  }
+
+  // ── HOST ADMITS KNOCKER ────────────────────────────────────────────────────
+  socket.on("room:admit", async ({ peerId }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.id) return; // only host can admit
+
+    const knockerMap = knockers.get(roomId);
+    if (!knockerMap) return;
+
+    const knocker = knockerMap.get(peerId);
+    if (!knocker) return;
+
+    knockerMap.delete(peerId);
+    knocker.socket.data.knockingRoom = null;
+
+    await admitToRoom(
+      knocker.socket,
+      roomId,
+      knocker.userName,
+      knocker.socket.data.userId,
+      room,
+      false
+    );
+    console.log(`[Room] Host ${socket.id} admitted ${peerId} to ${roomId}`);
   });
 
-  // ── WEBRTC OFFER ───────────────────────────────────────────────────────────
+  // ── HOST REJECTS KNOCKER ───────────────────────────────────────────────────
+  socket.on("room:reject", ({ peerId }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.id) return;
+
+    const knockerMap = knockers.get(roomId);
+    const knocker = knockerMap?.get(peerId);
+    if (!knocker) return;
+
+    knockerMap.delete(peerId);
+    knocker.socket.emit("room:rejected", { message: "Host did not admit you." });
+    console.log(`[Room] Host ${socket.id} rejected ${peerId} from ${roomId}`);
+  });
+
+  // ── WEBRTC ─────────────────────────────────────────────────────────────────
   socket.on("webrtc:offer", ({ targetId, sdp }) => {
     console.log(`[WebRTC] Offer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("webrtc:offer", { fromId: socket.id, userName: socket.data.userName, sdp });
   });
 
-  // ── WEBRTC ANSWER ──────────────────────────────────────────────────────────
   socket.on("webrtc:answer", ({ targetId, sdp }) => {
     console.log(`[WebRTC] Answer: ${socket.id} → ${targetId}`);
     io.to(targetId).emit("webrtc:answer", { fromId: socket.id, sdp });
   });
 
-  // ── ICE CANDIDATE ──────────────────────────────────────────────────────────
+  // ICE candidate — relay only, no host restriction needed (WebRTC internal)
   socket.on("webrtc:ice-candidate", ({ targetId, candidate }) => {
     io.to(targetId).emit("webrtc:ice-candidate", { fromId: socket.id, candidate });
   });
 
-  // ── MEDIA STATE CHANGES ────────────────────────────────────────────────────
+  // ── MEDIA STATE ────────────────────────────────────────────────────────────
   socket.on("media:state-change", ({ type, enabled }) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
     socket.to(roomId).emit("peer:media-state-change", { peerId: socket.id, type, enabled });
+  });
+
+  // ── SPEAKING STATE (for border highlight) ──────────────────────────────────
+  socket.on("speaking:state", ({ speaking }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    socket.to(roomId).emit("peer:speaking", { peerId: socket.id, speaking });
   });
 
   // ── TRANSLATION STATE ──────────────────────────────────────────────────────
@@ -193,46 +260,72 @@ io.on("connection", (socket) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
     socket.to(roomId).emit("peer:translation-state", { peerId: socket.id, enabled, srcLang, tgtLang });
-    console.log(`[Translation] ${socket.id} ${enabled ? "enabled" : "disabled"} (${srcLang}→${tgtLang})`);
+    console.log(`[Translation] ${socket.id} ${enabled ? "ON" : "OFF"} (${srcLang}→${tgtLang})`);
   });
 
-  // ── CHAT MESSAGE ───────────────────────────────────────────────────────────
-  socket.on("chat:message", ({ message, timestamp }) => {
+  // ── CHAT MESSAGE — include senderLang ──────────────────────────────────────
+  socket.on("chat:message", ({ message, senderLang, timestamp }) => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
     io.to(roomId).emit("chat:message", {
       fromId: socket.id,
       userName: socket.data.userName,
       message,
+      senderLang: senderLang || "en",   // ✅ pass senderLang to all clients
       timestamp: timestamp || Date.now(),
     });
   });
 
-  // ── LEAVE ROOM ─────────────────────────────────────────────────────────────
-  socket.on("room:leave", () => leaveRoom(socket));
+  // ── HOST MUTE — only host can trigger ─────────────────────────────────────
+  socket.on("host:mute", ({ targetId }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.id) return; // ✅ server-side host check
+    io.to(targetId).emit("host:mute");
+    console.log(`[Host] ${socket.id} muted ${targetId}`);
+  });
 
-  // ── DISCONNECT ─────────────────────────────────────────────────────────────
+  socket.on("host:unmute", ({ targetId }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.id) return;
+    io.to(targetId).emit("host:unmute");
+  });
+
+  // ── SCREEN SHARE ───────────────────────────────────────────────────────────
+  socket.on("screen:share", ({ enabled }) => {
+    const roomId = socket.data.roomId;
+    if (!roomId) return;
+    socket.to(roomId).emit("screen:share", { enabled, fromId: socket.id });
+  });
+
+  // ── LEAVE / DISCONNECT ─────────────────────────────────────────────────────
+  socket.on("room:leave", () => leaveRoom(socket));
   socket.on("disconnect", (reason) => {
     console.log(`[Socket] Disconnected: ${socket.id} | reason: ${reason}`);
     leaveRoom(socket);
+    // If they were knocking, clean up
+    if (socket.data.knockingRoom) {
+      knockers.get(socket.data.knockingRoom)?.delete(socket.id);
+    }
   });
 });
 
-// ─── REST endpoints ───────────────────────────────────────────────────────────
+// ─── REST ─────────────────────────────────────────────────────────────────────
 app.get("/room/:roomId", (req, res) => {
   const info = getRoomInfo(req.params.roomId);
   if (!info) return res.json({ exists: false });
   res.json({ exists: true, ...info });
 });
 
-// ✅ New: fetch meeting history for a user
 app.get("/history/:userId", async (req, res) => {
   const { data, error } = await supabase
     .from("meeting_participants")
     .select("room_id, joined_at, left_at")
     .eq("user_id", req.params.userId)
     .order("joined_at", { ascending: false });
-
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -241,7 +334,6 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", rooms: rooms.size, uptime: process.uptime() });
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
   console.log(`\n🚀 Signalling server running on port ${PORT}`);
